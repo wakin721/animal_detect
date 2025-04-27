@@ -18,6 +18,7 @@ from functools import partial
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import sv_ttk  # Sun Valley ttk theme for Windows 11 style
+import cv2
 
 import pandas as pd
 import numpy as np
@@ -37,8 +38,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 配置常量
-APP_TITLE = "物种信息检测 v3.0"
-APP_VERSION = "3.0.0"
+APP_TITLE = "物种信息检测 v4.4"
+APP_VERSION = "4.4.0"
 DEFAULT_EXCEL_FILENAME = "物种检测信息.xlsx"
 SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.webp')
 DATE_FORMATS = ['%Y:%m:%d %H:%M:%S', '%Y:%d:%m %H:%M:%S', '%Y-%m-%d %H:%M:%S']
@@ -92,12 +93,18 @@ class ImageProcessor:
             logger.error(f"加载模型失败: {e}")
             return None
 
-    def detect_species(self, img_path: str, use_fp16: bool = True) -> Dict[str, Any]:
+    def detect_species(self, img_path: str, use_fp16: bool = True,
+                       iou: float = 0.3, conf: float = 0.25,
+                       augment: bool = True, agnostic_nms: bool = True) -> Dict[str, Any]:
         """使用YOLO模型识别图片中的物种
 
         Args:
             img_path: 图片文件路径
             use_fp16: 是否使用FP16加速推理
+            iou: IOU阈值
+            conf: 置信度阈值
+            augment: 是否使用数据增强
+            agnostic_nms: 是否使用类别无关NMS
 
         Returns:
             包含物种信息的字典
@@ -117,15 +124,15 @@ class ImageProcessor:
             }
 
         try:
-            # 使用高级参数提高检测质量并优化性能
+            # 使用参数进行检测
             results = self.model(
                 img_path,
-                augment=True,
-                agnostic_nms=True,
+                augment=augment,
+                agnostic_nms=agnostic_nms,
                 imgsz=1024,
-                half=use_fp16,  # 根据选项决定是否使用FP16加速
-                iou=0.3,
-                conf=0.25  # 设置置信度阈值以减少误检
+                half=use_fp16,
+                iou=iou,
+                conf=conf
             )
             detect_results = results
 
@@ -453,7 +460,7 @@ class ObjectDetectionGUI:
         sv_ttk.set_theme("light")
 
         # 设置窗口尺寸和位置
-        width, height = 750, 630
+        width, height = 730, 730
         screen_width = master.winfo_screenwidth()
         screen_height = master.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -475,6 +482,7 @@ class ObjectDetectionGUI:
         self.is_processing = False
         self.processing_stop_flag = threading.Event()
         self.preview_image = None
+        self.current_detection_results = None
 
         # 创建GUI元素
         self._create_ui_elements()
@@ -575,13 +583,6 @@ class ObjectDetectionGUI:
             style="Switch.TCheckbutton")
         copy_img_switch.grid(row=2, column=0, sticky="w", pady=5)
 
-        # 添加FP16加速选项
-        use_fp16_switch = ttk.Checkbutton(
-            options_container, text="使用FP16加速推理 (提高速度，可能略微降低精度)",
-            variable=self.use_fp16_var,
-            style="Switch.TCheckbutton")
-        use_fp16_switch.grid(row=3, column=0, sticky="w", pady=5)
-
         # 选项卡2：图像预览
         self.preview_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.preview_frame, text="图像预览")
@@ -605,7 +606,7 @@ class ObjectDetectionGUI:
         image_frame = ttk.LabelFrame(preview_content, text="图像预览")
         image_frame.pack(side="right", fill="both", expand=True)
 
-        self.image_label = ttk.Label(image_frame)
+        self.image_label = ttk.Label(image_frame, text="请从左侧列表选择图像", anchor="center")
         self.image_label.pack(fill="both", expand=True, padx=PADDING, pady=PADDING)
 
         # 添加底部信息框
@@ -616,55 +617,150 @@ class ObjectDetectionGUI:
         self.info_text.pack(fill="both", expand=True, padx=5, pady=5)
         self.info_text.config(state="disabled")
 
+        # 添加切换按钮
+        preview_controls = ttk.Frame(self.preview_frame)
+        preview_controls.pack(fill="x", padx=PADDING, pady=(PADDING, 0))
+
+        self.show_detection_var = tk.BooleanVar(value=False)
+        show_detection_switch = ttk.Checkbutton(
+            preview_controls, text="显示检测结果", variable=self.show_detection_var,
+            style="Switch.TCheckbutton", command=self.toggle_detection_preview)
+        show_detection_switch.pack(side="left", padx=PADDING)
+
+        # 添加手动检测按钮
+        self.detect_button = ttk.Button(
+            preview_controls, text="检测当前图像", command=self.detect_current_image, width=BUTTON_WIDTH)
+        self.detect_button.pack(side="right", padx=PADDING)
+
         # 选项卡3：高级设置
         self.advanced_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.advanced_frame, text="高级设置")
 
-        # 创建高级设置内容
+        # 创建高级设置内容 - 模型参数设置
         advanced_content = ModernFrame(self.advanced_frame, title="模型参数设置")
         advanced_content.pack(fill="x", padx=PADDING, pady=PADDING)
 
-        # 有关FP16的详细说明
-        fp16_info_frame = ttk.Frame(advanced_content)
-        fp16_info_frame.pack(fill="x", padx=PADDING, pady=PADDING)
+        # 创建参数设置框架
+        params_frame = ttk.Frame(advanced_content)
+        params_frame.pack(fill="x", padx=PADDING, pady=PADDING)
 
-        fp16_title = ttk.Label(
-            fp16_info_frame,
-            text="关于FP16加速",
-            font=('Segoe UI', 11, 'bold')
-        )
-        fp16_title.pack(anchor="w", pady=(0, 5))
+        # 初始化模型参数变量
+        self.iou_var = tk.DoubleVar(value=0.3)  # IOU阈值，默认0.3
+        self.conf_var = tk.DoubleVar(value=0.25)  # 置信度阈值，默认0.25
+        self.use_fp16_var = tk.BooleanVar(value=True)  # FP16加速，默认开启
+        self.use_augment_var = tk.BooleanVar(value=True)  # 数据增强，默认开启
+        self.use_agnostic_nms_var = tk.BooleanVar(value=True)  # 类别无关NMS，默认开启
+
+        # 创建参数控件 - 使用网格布局
+        params_frame.columnconfigure(0, weight=1)
+        params_frame.columnconfigure(1, weight=1)
+
+        row = 0
+
+        # IOU阈值滑动条
+        ttk.Label(params_frame, text="IOU阈值:", font=NORMAL_FONT).grid(row=row, column=0, sticky="w", pady=(10, 0))
+        row += 1
+
+        iou_frame = ttk.Frame(params_frame)
+        iou_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 10))
+
+        iou_scale = ttk.Scale(iou_frame, from_=0.1, to=0.9, orient="horizontal",
+                              variable=self.iou_var, command=self._update_iou_label)
+        iou_scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.iou_label = ttk.Label(iou_frame, text="0.30", width=4)
+        self.iou_label.pack(side="right")
+
+        row += 1
+
+        # 置信度阈值滑动条
+        ttk.Label(params_frame, text="置信度阈值:", font=NORMAL_FONT).grid(row=row, column=0, sticky="w", pady=(10, 0))
+        row += 1
+
+        conf_frame = ttk.Frame(params_frame)
+        conf_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 10))
+
+        conf_scale = ttk.Scale(conf_frame, from_=0.05, to=0.95, orient="horizontal",
+                               variable=self.conf_var, command=self._update_conf_label)
+        conf_scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.conf_label = ttk.Label(conf_frame, text="0.25", width=4)
+        self.conf_label.pack(side="right")
+
+        row += 1
+
+        # 创建开关组
+        switches_frame = ttk.LabelFrame(params_frame, text="模型优化选项")
+        switches_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=10)
+
+        # FP16加速
+        fp16_switch = ttk.Checkbutton(
+            switches_frame, text="使用FP16加速推理", variable=self.use_fp16_var,
+            style="Switch.TCheckbutton")
+        fp16_switch.pack(anchor="w", padx=10, pady=(10, 5))
 
         fp16_desc = ttk.Label(
-            fp16_info_frame,
-            text="FP16（半精度浮点）是一种数据格式，相比标准的FP32（单精度浮点）占用更少的内存，"
-                 "并且在支持的硬件上可以提供更快的计算速度。\n\n"
-                 "优点:\n"
-                 "• 处理速度提升20-50%\n"
-                 "• 内存占用减少\n"
-                 "• 电池供电设备上更节能\n\n"
-                 "缺点:\n"
-                 "• 可能在某些复杂场景下略微降低检测精度\n"
-                 "• 不是所有设备都能充分利用FP16加速",
-            wraplength=600,
-            justify="left"
-        )
-        fp16_desc.pack(anchor="w")
+            switches_frame,
+            text="减少内存使用并提高速度，可能略微降低精度",
+            font=SMALL_FONT,
+            foreground="gray")
+        fp16_desc.pack(anchor="w", padx=30, pady=(0, 10))
 
-        # 性能建议
-        performance_frame = ttk.LabelFrame(self.advanced_frame, text="性能建议")
-        performance_frame.pack(fill="x", padx=PADDING, pady=PADDING)
+        # 数据增强
+        augment_switch = ttk.Checkbutton(
+            switches_frame, text="使用数据增强", variable=self.use_augment_var,
+            style="Switch.TCheckbutton")
+        augment_switch.pack(anchor="w", padx=10, pady=(5, 5))
 
-        performance_text = ttk.Label(
-            performance_frame,
-            text="• 在配置较高的电脑上，建议开启FP16加速以获得更快的处理速度\n"
-                 "• 如果发现检测结果不理想，可尝试关闭FP16加速\n"
-                 "• 处理大量图片时，建议关闭不必要的应用程序以释放系统资源\n",
+        augment_desc = ttk.Label(
+            switches_frame,
+            text="通过测试时增强提高检测准确性，但会降低速度",
+            font=SMALL_FONT,
+            foreground="gray")
+        augment_desc.pack(anchor="w", padx=30, pady=(0, 10))
+
+        # 类别无关NMS
+        agnostic_nms_switch = ttk.Checkbutton(
+            switches_frame, text="使用类别无关NMS", variable=self.use_agnostic_nms_var,
+            style="Switch.TCheckbutton")
+        agnostic_nms_switch.pack(anchor="w", padx=10, pady=(5, 5))
+
+        agnostic_nms_desc = ttk.Label(
+            switches_frame,
+            text="忽略类别信息进行非极大值抑制，对多类别场景有优势",
+            font=SMALL_FONT,
+            foreground="gray")
+        agnostic_nms_desc.pack(anchor="w", padx=30, pady=(0, 10))
+
+        # 参数说明
+        explanation_frame = ttk.LabelFrame(self.advanced_frame, text="参数说明")
+        explanation_frame.pack(fill="x", padx=PADDING, pady=PADDING)
+
+        explanation_text = """
+            IOU阈值：控制边界框的重叠程度，值越低检出的框越多，可能导致重复检测；值越高检出的框越少，可能导致漏检。
+
+            置信度阈值：控制检测结果的可信度，值越低检出更多低置信度目标，可能增加误检；值越高仅保留高置信度目标，可能导致漏检。
+
+            FP16加速：使用半精度浮点数进行计算，可提高20-50%的速度，但在某些场景可能略微减少精度。
+
+            数据增强：在检测过程中应用多种变换以提高准确性，但会减慢处理速度，对复杂场景有帮助。
+
+            类别无关NMS：在消除重复边界框时忽略类别信息，对同一位置可能出现多种类别的场景有帮助。
+            """
+
+        explanation_label = ttk.Label(
+            explanation_frame,
+            text=explanation_text.strip(),
             wraplength=600,
             justify="left",
             padding=PADDING
         )
-        performance_text.pack(anchor="w")
+        explanation_label.pack(anchor="w", padx=5, pady=5)
+
+        # 重置按钮
+        reset_button = ttk.Button(
+            self.advanced_frame, text="恢复默认参数", command=self._reset_model_params, width=BUTTON_WIDTH)
+        reset_button.pack(anchor="e", padx=PADDING, pady=PADDING)
 
         # 选项卡4：关于
         self.about_frame = ttk.Frame(self.notebook)
@@ -740,6 +836,25 @@ class ObjectDetectionGUI:
         self.save_path_entry.bind("<Return>", self.save_save_path_by_enter)
         self.file_listbox.bind("<<ListboxSelect>>", self.on_file_selected)
 
+        # 添加选项卡切换事件
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
+    def on_tab_changed(self, event) -> None:
+        """处理选项卡切换事件"""
+        # 如果切换到预览选项卡
+        if self.notebook.index(self.notebook.select()) == 1:
+            # 确保文件列表已更新
+            file_path = self.file_path_entry.get()
+            if file_path and os.path.isdir(file_path):
+                # 如果文件列表为空，则更新
+                if self.file_listbox.size() == 0:
+                    self.update_file_list(file_path)
+
+                # 如果有文件且没有选择，则选择第一个
+                if self.file_listbox.size() > 0 and not self.file_listbox.curselection():
+                    self.file_listbox.selection_set(0)
+                    self.on_file_selected(None)
+
     def on_closing(self) -> None:
         """窗口关闭事件处理"""
         if self.is_processing:
@@ -755,6 +870,11 @@ class ObjectDetectionGUI:
             self.file_path_entry.delete(0, tk.END)
             self.file_path_entry.insert(0, folder_selected)
             self.update_file_list(folder_selected)
+
+            # 如果当前在预览选项卡，自动选择第一个文件
+            if self.notebook.index(self.notebook.select()) == 1 and self.file_listbox.size() > 0:
+                self.file_listbox.selection_set(0)
+                self.on_file_selected(None)
 
     def browse_save_path(self) -> None:
         """浏览保存路径"""
@@ -803,10 +923,28 @@ class ObjectDetectionGUI:
         # 更新图像信息
         self.update_image_info(file_path, file_name)
 
-    def update_image_preview(self, file_path: str) -> None:
-        """更新图像预览"""
+    def update_image_preview(self, file_path: str, show_detection: bool = False, detection_results=None) -> None:
+        """更新图像预览
+
+        Args:
+            file_path: 图像文件路径
+            show_detection: 是否显示检测结果
+            detection_results: YOLO检测结果对象
+        """
         try:
-            img = Image.open(file_path)
+            if show_detection and detection_results is not None:
+                # 获取YOLO绘制的检测结果图像
+                # 这里使用YOLO自带的绘制功能获取处理后的图像
+                for result in detection_results:
+                    # 使用plots功能获取绘制了检测框的图像
+                    result_img = result.plot()
+                    # 将OpenCV的BGR格式转换为RGB格式
+                    result_img_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(result_img_rgb)
+                    break  # 只使用第一个结果
+            else:
+                # 显示原始图像
+                img = Image.open(file_path)
 
             # 计算调整大小的比例，以适应预览区域
             max_width = 400
@@ -900,7 +1038,7 @@ class ObjectDetectionGUI:
         save_detect_image = self.save_detect_image_var.get()
         output_excel = self.output_excel_var.get()
         copy_img = self.copy_img_var.get()
-        use_fp16 = self.use_fp16_var.get()  # 获取FP16加速设置
+        use_fp16 = self.use_fp16_var.get()  # 从高级设置中获取FP16设置
 
         # 验证输入
         if not self._validate_inputs(file_path, save_path):
@@ -1021,10 +1159,16 @@ class ObjectDetectionGUI:
         earliest_date = None
 
         try:
-            # 显示FP16状态
+            # 获取高级设置参数
+            iou = self.iou_var.get()
+            conf = self.conf_var.get()
+            augment = self.use_augment_var.get()
+            agnostic_nms = self.use_agnostic_nms_var.get()
+
+            # 显示当前使用的设置
             fp16_status = "启用" if use_fp16 else "禁用"
             self.master.after(0, lambda: self.status_bar.status_label.config(
-                text=f"正在处理图像... FP16加速: {fp16_status}"))
+                text=f"正在处理图像... FP16加速: {fp16_status}, IOU: {iou:.2f}, 置信度: {conf:.2f}"))
 
             # 获取所有图片文件
             image_files = self._get_image_files(file_path)
@@ -1065,14 +1209,20 @@ class ObjectDetectionGUI:
                     img_path = os.path.join(file_path, filename)
                     image_info, img = ImageMetadataExtractor.extract_metadata(img_path, filename)
 
-                    # 检测物种 - 传递FP16设置
-                    species_info = self.image_processor.detect_species(img_path, use_fp16)
-                    image_info.update({
-                        '物种名称': species_info['物种名称'],
-                        '物种数量': species_info['物种数量'],
-                        'detect_results': species_info['detect_results'],
-                        '最低置信度': species_info['最低置信度']
-                    })
+                    # 检测物种 - 使用高级设置参数
+                    species_info = self.image_processor.detect_species(
+                        img_path,
+                        use_fp16=use_fp16,
+                        iou=iou,
+                        conf=conf,
+                        augment=augment,
+                        agnostic_nms=agnostic_nms
+                    )
+
+                    # 更新预览图像 - 显示检测结果
+                    detect_results = species_info['detect_results']
+                    self.master.after(0, lambda p=img_path, d=detect_results:
+                    self.update_image_preview(p, True, d))
 
                     # 更新最早日期
                     if image_info.get('拍摄日期对象'):
@@ -1207,10 +1357,147 @@ class ObjectDetectionGUI:
         # 刷新UI
         self.master.update_idletasks()
 
+    def toggle_detection_preview(self) -> None:
+        """切换是否显示检测结果"""
+        selection = self.file_listbox.curselection()
+        if not selection:
+            return
+
+        file_name = self.file_listbox.get(selection[0])
+        file_path = os.path.join(self.file_path_entry.get(), file_name)
+
+        # 获取当前选中文件的检测结果
+        if hasattr(self, 'current_detection_results') and self.current_detection_results is not None:
+            self.update_image_preview(
+                file_path,
+                self.show_detection_var.get(),
+                self.current_detection_results
+            )
+        else:
+            # 如果没有检测结果，显示原始图像
+            self.update_image_preview(file_path, False)
+
+            if self.show_detection_var.get():
+                messagebox.showinfo("提示", '当前图像尚未检测，请点击"检测当前图像"按钮。')
+                self.show_detection_var.set(False)
+
+    def detect_current_image(self) -> None:
+        """检测当前选中的图像"""
+        selection = self.file_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("提示", "请先选择一张图像。")
+            return
+
+        file_name = self.file_listbox.get(selection[0])
+        file_path = os.path.join(self.file_path_entry.get(), file_name)
+
+        # 显示处理状态
+        self.status_bar.status_label.config(text="正在检测图像...")
+        self.detect_button.config(state="disabled")
+
+        # 在单独的线程中执行检测，避免界面卡顿
+        threading.Thread(
+            target=self._detect_image_thread,
+            args=(file_path, file_name),
+            daemon=True
+        ).start()
+
+    def _detect_image_thread(self, img_path: str, filename: str) -> None:
+        """在单独线程中执行图像检测
+        Args:
+            img_path: 图像文件路径
+            filename: 图像文件名
+        """
+        try:
+            # 检测物种 - 使用高级设置参数
+            species_info = self.image_processor.detect_species(
+                img_path,
+                use_fp16=self.use_fp16_var.get(),
+                iou=self.iou_var.get(),
+                conf=self.conf_var.get(),
+                augment=self.use_augment_var.get(),
+                agnostic_nms=self.use_agnostic_nms_var.get()
+            )
+
+            # 保存检测结果以便在预览中使用
+            self.current_detection_results = species_info['detect_results']
+
+            # 切换到显示检测结果
+            self.master.after(0, lambda: self.show_detection_var.set(True))
+
+            # 更新预览图像
+            self.master.after(0, lambda: self.update_image_preview(
+                img_path, True, self.current_detection_results))
+
+            # 更新信息文本
+            self.master.after(0, lambda: self._update_detection_info(species_info))
+
+        except Exception as e:
+            logger.error(f"检测图像失败: {e}")
+            self.master.after(0, lambda: messagebox.showerror("错误", f"检测图像失败: {e}"))
+        finally:
+            # 恢复按钮状态
+            self.master.after(0, lambda: self.detect_button.config(state="normal"))
+            self.master.after(0, lambda: self.status_bar.status_label.config(text="检测完成"))
+
+    def _update_detection_info(self, species_info: Dict) -> None:
+        """更新检测信息文本
+
+        Args:
+            species_info: 物种检测信息
+        """
+        self.info_text.config(state="normal")
+
+        # 保留原始信息，添加检测结果
+        current_text = self.info_text.get(1.0, tk.END)
+
+        # 在文本末尾添加检测信息
+        detection_info = "\n\n检测结果:\n"
+        if species_info['物种名称']:
+            species_names = species_info['物种名称'].split(',')
+            species_counts = species_info['物种数量'].split(',')
+
+            for i, (name, count) in enumerate(zip(species_names, species_counts)):
+                detection_info += f"- {name}: {count}只\n"
+
+            if species_info['最低置信度']:
+                detection_info += f"\n最低置信度: {species_info['最低置信度']}"
+        else:
+            detection_info += "未检测到已知物种"
+
+        # 设置新的文本内容
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, current_text.strip() + detection_info)
+        self.info_text.config(state="disabled")
+
+    def _update_iou_label(self, value) -> None:
+        """更新IOU标签显示"""
+        iou_value = float(value)
+        self.iou_label.config(text=f"{iou_value:.2f}")
+
+    def _update_conf_label(self, value) -> None:
+        """更新置信度标签显示"""
+        conf_value = float(value)
+        self.conf_label.config(text=f"{conf_value:.2f}")
+
+    def _reset_model_params(self) -> None:
+        """重置模型参数到默认值"""
+        self.iou_var.set(0.3)
+        self.conf_var.set(0.25)
+        self.use_fp16_var.set(True)
+        self.use_augment_var.set(True)
+        self.use_agnostic_nms_var.set(True)
+
+        # 更新标签
+        self._update_iou_label(0.3)
+        self._update_conf_label(0.25)
+
+        messagebox.showinfo("参数重置", "模型参数已恢复为默认值")
 
 def main():
     """程序入口点"""
     root = tk.Tk()
+    root.resizable(False, False)
     app = ObjectDetectionGUI(root)
     root.mainloop()
 
