@@ -19,6 +19,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import sv_ttk  # Sun Valley ttk theme for Windows 11 style
 import cv2
+import json
 
 import pandas as pd
 import numpy as np
@@ -38,8 +39,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 配置常量
-APP_TITLE = "物种信息检测 v4.5"
-APP_VERSION = "4.5.1"
+APP_TITLE = "物种信息检测 v4.6"
+APP_VERSION = "4.6.3"
 DEFAULT_EXCEL_FILENAME = "物种检测信息.xlsx"
 SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.webp')
 DATE_FORMATS = ['%Y:%m:%d %H:%M:%S', '%Y:%d:%m %H:%M:%S', '%Y-%m-%d %H:%M:%S']
@@ -587,6 +588,7 @@ class ObjectDetectionGUI:
         self.preview_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.preview_frame, text="图像预览")
 
+
         # 创建预览区域
         preview_content = ttk.Frame(self.preview_frame)
         preview_content.pack(fill="both", expand=True, padx=PADDING, pady=PADDING)
@@ -608,6 +610,8 @@ class ObjectDetectionGUI:
 
         self.image_label = ttk.Label(image_frame, text="请从左侧列表选择图像", anchor="center")
         self.image_label.pack(fill="both", expand=True, padx=PADDING, pady=PADDING)
+        # Add this to your existing event bindings in _bind_events method
+        self.image_label.bind("<Double-1>", self.show_enlarged_image)
 
         # 添加底部信息框
         info_frame = ttk.LabelFrame(self.preview_frame, text="图像信息")
@@ -1534,6 +1538,200 @@ class ObjectDetectionGUI:
                                   command=explanation_window.destroy,
                                   width=BUTTON_WIDTH)
         close_button.pack(pady=(0, 15))
+
+    def show_enlarged_image(self, event=None) -> None:
+        """显示放大后的图像（在新窗口中），支持窗口调整大小时图像同步缩放并保持居中
+        保存窗口大小和位置以供下次使用
+
+        Args:
+            event: 事件对象（可选）
+        """
+        # 检查是否有选中的文件
+        selection = self.file_listbox.curselection()
+        if not selection:
+            return
+
+        file_name = self.file_listbox.get(selection[0])
+        file_path = os.path.join(self.file_path_entry.get(), file_name)
+
+        # 配置文件路径
+        config_dir = os.path.join(os.path.expanduser("~"), ".image_viewer_config")
+        config_file = os.path.join(config_dir, "window_settings.json")
+
+        # 确保配置目录存在
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir)
+
+        # 尝试加载已保存的窗口设置
+        window_settings = {}
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    window_settings = json.load(f)
+            except Exception as e:
+                logger.warning(f"无法加载窗口设置: {e}")
+
+        # 创建新窗口
+        enlarged_window = tk.Toplevel(self.master)
+        enlarged_window.title(f"放大图像 - {file_name}")
+
+        # 设置窗口图标
+        try:
+            ico_path = resource_path(os.path.join("res", "ico.ico"))
+            enlarged_window.iconbitmap(ico_path)
+        except Exception as e:
+            logger.warning(f"无法加载窗口图标: {e}")
+
+        # 如果有保存的设置，使用它们；否则使用默认设置
+        if window_settings and 'geometry' in window_settings:
+            enlarged_window.geometry(window_settings['geometry'])
+        else:
+            # 计算窗口大小（屏幕大小的80%）
+            screen_width = self.master.winfo_screenwidth()
+            screen_height = self.master.winfo_screenheight()
+            window_width = int(screen_width * 0.8)
+            window_height = int(screen_height * 0.8)
+
+            # 窗口居中
+            x = (screen_width - window_width) // 2
+            y = (screen_height - window_height) // 2
+            enlarged_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+
+        # 加载原始图像
+        try:
+            # 获取要显示的图像数据
+            if self.show_detection_var.get() and self.current_detection_results is not None:
+                # 显示检测结果图像
+                for result in self.current_detection_results:
+                    result_img = result.plot()
+                    result_img_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
+                    original_image = Image.fromarray(result_img_rgb)
+                    break  # 只使用第一个结果
+            else:
+                # 显示原始图像
+                original_image = Image.open(file_path)
+
+            # 保存原始图像尺寸供后续使用
+            original_width, original_height = original_image.size
+
+            # 主框架
+            main_frame = ttk.Frame(enlarged_window)
+            main_frame.pack(fill="both", expand=True)
+
+            # 配置主框架以便调整大小
+            main_frame.columnconfigure(0, weight=1)
+            main_frame.rowconfigure(0, weight=1)
+
+            # 创建画布来显示图像（替代之前的Label）
+            canvas = tk.Canvas(main_frame, highlightthickness=0, bd=0)
+            canvas.grid(row=0, column=0, sticky="nsew", padx=PADDING, pady=PADDING)
+
+            # 添加底部信息栏
+            info_frame = ttk.Frame(main_frame)
+            info_frame.grid(row=1, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
+
+            # 尺寸信息标签
+            size_label = ttk.Label(info_frame, font=SMALL_FONT)
+            size_label.pack(side="left")
+
+            # 关闭按钮
+            close_button = ttk.Button(
+                info_frame,
+                text="关闭",
+                command=lambda: close_window(enlarged_window),
+                width=BUTTON_WIDTH
+            )
+            close_button.pack(side="right", padx=(PADDING, 0))
+
+            # 函数：根据窗口大小调整图像并保持居中
+            def resize_image(event=None):
+                # 获取当前窗口可用空间（考虑内边距和底部信息栏）
+                available_width = main_frame.winfo_width() - (PADDING * 2)
+                available_height = main_frame.winfo_height() - info_frame.winfo_height() - (PADDING * 2)
+
+                # 确保有有效的尺寸（避免初始化时的零值问题）
+                if available_width <= 1 or available_height <= 1:
+                    return
+
+                # 计算缩放比例（保持宽高比）
+                scale_factor = min(
+                    available_width / original_width,
+                    available_height / original_height
+                )
+
+                # 计算新尺寸
+                new_width = int(original_width * scale_factor)
+                new_height = int(original_height * scale_factor)
+
+                # 调整图像大小
+                resized_img = original_image.resize((new_width, new_height), Image.LANCZOS)
+
+                # 更新PhotoImage
+                photo = ImageTk.PhotoImage(resized_img)
+
+                # 清除画布并设置新的尺寸
+                canvas.delete("all")
+                canvas.config(width=available_width, height=available_height)
+
+                # 计算居中位置
+                x_center = available_width // 2
+                y_center = available_height // 2
+
+                # 在画布上创建居中的图像
+                canvas.create_image(x_center, y_center, image=photo, anchor="center")
+                canvas.image = photo  # 保持引用，防止被垃圾回收
+
+                # 更新尺寸信息
+                size_label.configure(
+                    text=f"原始尺寸: {original_width}x{original_height} | 显示尺寸: {new_width}x{new_height}")
+
+            # 函数：保存窗口设置并关闭窗口
+            def close_window(window):
+                try:
+                    # 保存窗口几何信息
+                    geometry = window.geometry()
+                    window_settings['geometry'] = geometry
+
+                    # 将设置保存到文件
+                    with open(config_file, 'w') as f:
+                        json.dump(window_settings, f)
+                except Exception as e:
+                    logger.warning(f"保存窗口设置失败: {e}")
+
+                # 关闭窗口
+                window.destroy()
+
+            # 绑定窗口大小变化事件
+            main_frame.bind("<Configure>", resize_image)
+
+            # 绑定ESC键关闭窗口（使用新的close_window函数）
+            enlarged_window.bind("<Escape>", lambda e: close_window(enlarged_window))
+
+            # 绑定窗口关闭事件
+            enlarged_window.protocol("WM_DELETE_WINDOW", lambda: close_window(enlarged_window))
+
+            # 初始调整图像大小
+            # 等待窗口完成初始化后调用resize_image
+            enlarged_window.update()
+            resize_image()
+
+        except Exception as e:
+            logger.error(f"显示放大图像失败: {e}")
+            error_label = ttk.Label(enlarged_window, text=f"无法加载图像: {e}", foreground="red")
+            error_label.pack(padx=PADDING, pady=PADDING)
+
+    def _bind_events(self) -> None:
+        """绑定事件处理函数"""
+        self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.file_path_entry.bind("<Return>", self.save_file_path_by_enter)
+        self.save_path_entry.bind("<Return>", self.save_save_path_by_enter)
+        self.file_listbox.bind("<<ListboxSelect>>", self.on_file_selected)
+
+        # 添加图像标签的双击事件
+        self.image_label.bind("<Double-1>", self.show_enlarged_image)
+
+        # 添加选项卡切换事件
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
 def main():
     """程序入口点"""
