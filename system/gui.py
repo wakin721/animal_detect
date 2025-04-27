@@ -227,6 +227,14 @@ class ObjectDetectionGUI:
         params_frame = ttk.Frame(advanced_content)
         params_frame.pack(fill="x", padx=PADDING, pady=PADDING)
 
+        # 添加帮助按钮
+        help_button_frame = ttk.Frame(advanced_content)
+        help_button_frame.pack(fill="x", padx=PADDING, pady=(0, PADDING))
+        
+        help_button = ttk.Button(
+            help_button_frame, text="查看参数说明", command=self.show_params_help, width=BUTTON_WIDTH)
+        help_button.pack(side="right")
+
         # 初始化模型参数变量
         self.iou_var = tk.DoubleVar(value=0.3)  # IOU阈值，默认0.3
         self.conf_var = tk.DoubleVar(value=0.25)  # 置信度阈值，默认0.25
@@ -315,31 +323,6 @@ class ObjectDetectionGUI:
             foreground="gray")
         agnostic_nms_desc.pack(anchor="w", padx=30, pady=(0, 10))
 
-        # 参数说明
-        explanation_frame = ttk.LabelFrame(self.advanced_frame, text="参数说明")
-        explanation_frame.pack(fill="x", padx=PADDING, pady=PADDING)
-
-        explanation_text = """
-            IOU阈值：控制边界框的重叠程度，值越低检出的框越多，可能导致重复检测；值越高检出的框越少，可能导致漏检。
-
-            置信度阈值：控制检测结果的可信度，值越低检出更多低置信度目标，可能增加误检；值越高仅保留高置信度目标，可能导致漏检。
-
-            FP16加速：使用半精度浮点数进行计算，可提高20-50%的速度，但在某些场景可能略微减少精度。
-
-            数据增强：在检测过程中应用多种变换以提高准确性，但会减慢处理速度，对复杂场景有帮助。
-
-            类别无关NMS：在消除重复边界框时忽略类别信息，对同一位置可能出现多种类别的场景有帮助。
-            """
-
-        explanation_label = ttk.Label(
-            explanation_frame,
-            text=explanation_text.strip(),
-            wraplength=600,
-            justify="left",
-            padding=PADDING
-        )
-        explanation_label.pack(anchor="w", padx=5, pady=5)
-
         # 重置按钮
         reset_button = ttk.Button(
             self.advanced_frame, text="恢复默认参数", command=self._reset_model_params, width=BUTTON_WIDTH)
@@ -411,6 +394,115 @@ class ObjectDetectionGUI:
         # 底部状态栏
         self.status_bar = InfoBar(self.master)
         self.status_bar.grid(row=3, column=0, sticky="ew")
+
+    def show_params_help(self) -> None:
+        """显示参数说明弹窗"""
+        # 创建一个顶层窗口
+        help_window = tk.Toplevel(self.master)
+        help_window.title("参数说明")
+        
+        # 设置窗口尺寸
+        width, height = 500, 400
+        screen_width = self.master.winfo_screenwidth()
+        screen_height = self.master.winfo_screenheight()
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        help_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # 设置窗口为模态，用户必须关闭此窗口才能继续操作主窗口
+        help_window.transient(self.master)
+        help_window.grab_set()
+        
+        # 尝试设置相同的图标
+        try:
+            ico_path = resource_path(os.path.join("res", "ico.ico"))
+            help_window.iconbitmap(ico_path)
+        except Exception:
+            pass
+        
+        # 创建一个框架容器
+        content_frame = ttk.Frame(help_window, padding=PADDING)
+        content_frame.pack(fill="both", expand=True)
+        
+        # 创建带滚动条的文本区域
+        text_frame = ttk.Frame(content_frame)
+        text_frame.pack(fill="both", expand=True, pady=(0, PADDING))
+        
+        help_text = tk.Text(text_frame, wrap="word", font=NORMAL_FONT)
+        help_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=help_text.yview)
+        help_text.configure(yscrollcommand=help_scroll.set)
+        
+        help_scroll.pack(side="right", fill="y")
+        help_text.pack(side="left", fill="both", expand=True)
+        
+        # 设置参数说明文本
+        param_help_text = """
+IOU阈值 (Intersection Over Union)
+
+说明：控制对象检测中边界框的重叠程度判定。
+作用：用于消除冗余边界框，只保留得分最高的那个。
+调节建议：
+  - 较低值 (0.1-0.3)：检出更多目标，但可能有重复框
+  - 中等值 (0.3-0.5)：平衡检出率和重复率
+  - 较高值 (0.5-0.9)：减少重复框，但可能漏检部分目标
+适用场景：当目标物体互相重叠时，提高IOU阈值可避免多重检测
+
+置信度阈值 (Confidence Threshold)
+
+说明：决定检测结果是否被保留的可信度标准。
+作用：过滤掉低置信度的检测结果，减少误检。
+调节建议：
+  - 较低值 (0.05-0.2)：检出更多潜在目标，但可能增加误检率
+  - 中等值 (0.2-0.4)：平衡检出率和误检率
+  - 较高值 (0.4-0.95)：仅保留高置信度目标，减少误检但可能增加漏检
+适用场景：检测难度大的场景可适当降低，简单明显的目标可提高
+
+FP16加速 (半精度浮点数加速)
+
+说明：使用16位浮点数而非32位浮点数进行计算。
+优势：
+  - 减少内存使用量约50%
+  - 提高推理速度20-50%
+  - 适合资源受限设备
+潜在问题：
+  - 对某些复杂场景可能略微降低精度
+  - 在某些旧硬件上可能不支持或无加速效果
+建议：大多数情况下建议开启，只有在发现明显精度下降时才考虑关闭
+
+数据增强 (Test-Time Augmentation)
+
+说明：在检测过程中对图像应用多种变换，综合多个结果。
+优势：
+  - 提高检测准确性和稳定性
+  - 减少因视角、光照等因素导致的漏检
+缺点：
+  - 会显著降低处理速度（通常慢2-4倍）
+  - 增加内存占用
+适用场景：对精度要求高且不赶时间的场景；对处理速度有要求时建议关闭
+
+类别无关NMS (Class-Agnostic NMS)
+
+说明：在应用非极大值抑制时忽略类别信息。
+优势：
+  - 对可能同时出现多种类别的场景有帮助
+  - 避免不同类别目标因重叠而被错误抑制
+缺点：
+  - 在某些情况下可能导致错误分类的检测结果被保留
+适用场景：当单个物体可能被错误分类为多个类别时；当多个不同类别物体密集分布时
+"""
+        
+        help_text.insert("1.0", param_help_text.strip())
+        help_text.configure(state="disabled")  # 设置为只读
+        
+        # 添加关闭按钮
+        close_button = ttk.Button(content_frame, text="关闭", command=help_window.destroy, width=BUTTON_WIDTH)
+        close_button.pack(side="right")
+        
+        # 确保弹窗在最前
+        help_window.focus_set()
+        
+        # 防止窗口被调整大小
+        help_window.resizable(False, False)
 
     def _bind_events(self) -> None:
         """绑定事件处理函数"""
@@ -505,6 +597,7 @@ class ObjectDetectionGUI:
 
         # 更新图像信息
         self.update_image_info(file_path, file_name)
+
 
     def update_image_preview(self, file_path: str, show_detection: bool = False, detection_results=None) -> None:
         """更新图像预览
