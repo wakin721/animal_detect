@@ -39,8 +39,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 配置常量
-APP_TITLE = "物种信息检测 v4.6"
-APP_VERSION = "4.6.3"
+APP_TITLE = "物种信息检测 v1.4"
+APP_VERSION = "1.4.6"
 DEFAULT_EXCEL_FILENAME = "物种检测信息.xlsx"
 SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.webp')
 DATE_FORMATS = ['%Y:%m:%d %H:%M:%S', '%Y:%d:%m %H:%M:%S', '%Y-%m-%d %H:%M:%S']
