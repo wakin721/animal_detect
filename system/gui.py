@@ -66,6 +66,8 @@ class ObjectDetectionGUI:
         self.processing_stop_flag = threading.Event()
         self.preview_image = None
         self.current_detection_results = None
+        self.original_image = None  # 保存原始图像
+        self.current_image_path = None  # 保存当前图像路径
 
         # 创建GUI元素
         self._create_ui_elements()
@@ -145,7 +147,7 @@ class ObjectDetectionGUI:
         self.save_detect_image_var = tk.BooleanVar(value=True)
         self.output_excel_var = tk.BooleanVar(value=True)
         self.copy_img_var = tk.BooleanVar(value=False)
-        self.use_fp16_var = tk.BooleanVar(value=True)  # 新增FP16加速选项
+        self.use_fp16_var = tk.BooleanVar(value=False)  # 新增FP16加速选项
 
         options_container = ttk.Frame(options_frame)
         options_container.pack(fill="x", padx=PADDING, pady=PADDING)
@@ -162,7 +164,7 @@ class ObjectDetectionGUI:
         output_excel_switch.grid(row=1, column=0, sticky="w", pady=5)
 
         copy_img_switch = ttk.Checkbutton(
-            options_container, text="按物种分类复制图片", variable=self.copy_img_var,
+            options_container, text="按物种分类图片", variable=self.copy_img_var,
             style="Switch.TCheckbutton")
         copy_img_switch.grid(row=2, column=0, sticky="w", pady=5)
 
@@ -192,11 +194,15 @@ class ObjectDetectionGUI:
         self.image_label = ttk.Label(image_frame, text="请从左侧列表选择图像", anchor="center")
         self.image_label.pack(fill="both", expand=True, padx=PADDING, pady=PADDING)
 
+        # 为图像标签添加双击事件提示
+        image_hint = ttk.Label(image_frame, text="双击图像可放大查看", font=SMALL_FONT, foreground="gray")
+        image_hint.pack(side="bottom", fill="x", padx=PADDING, pady=(0, PADDING))
+
         # 添加底部信息框
         info_frame = ttk.LabelFrame(self.preview_frame, text="图像信息")
         info_frame.pack(fill="x", padx=PADDING, pady=(0, PADDING))
 
-        self.info_text = tk.Text(info_frame, height=5, font=NORMAL_FONT, wrap="word")
+        self.info_text = tk.Text(info_frame, height=3, font=NORMAL_FONT, wrap="word")
         self.info_text.pack(fill="both", expand=True, padx=5, pady=5)
         self.info_text.config(state="disabled")
 
@@ -213,7 +219,7 @@ class ObjectDetectionGUI:
         # 添加手动检测按钮
         self.detect_button = ttk.Button(
             preview_controls, text="检测当前图像", command=self.detect_current_image, width=BUTTON_WIDTH)
-        self.detect_button.pack(side="right", padx=PADDING)
+        self.detect_button.pack(side="right", padx=PADDING, pady=5)
 
         # 选项卡3：高级设置
         self.advanced_frame = ttk.Frame(self.notebook)
@@ -227,18 +233,10 @@ class ObjectDetectionGUI:
         params_frame = ttk.Frame(advanced_content)
         params_frame.pack(fill="x", padx=PADDING, pady=PADDING)
 
-        # 添加帮助按钮
-        help_button_frame = ttk.Frame(advanced_content)
-        help_button_frame.pack(fill="x", padx=PADDING, pady=(0, PADDING))
-        
-        help_button = ttk.Button(
-            help_button_frame, text="查看参数说明", command=self.show_params_help, width=BUTTON_WIDTH)
-        help_button.pack(side="right")
-
         # 初始化模型参数变量
         self.iou_var = tk.DoubleVar(value=0.3)  # IOU阈值，默认0.3
         self.conf_var = tk.DoubleVar(value=0.25)  # 置信度阈值，默认0.25
-        self.use_fp16_var = tk.BooleanVar(value=True)  # FP16加速，默认开启
+        self.use_fp16_var = tk.BooleanVar(value=False)  # FP16加速，默认开启
         self.use_augment_var = tk.BooleanVar(value=True)  # 数据增强，默认开启
         self.use_agnostic_nms_var = tk.BooleanVar(value=True)  # 类别无关NMS，默认开启
 
@@ -323,10 +321,19 @@ class ObjectDetectionGUI:
             foreground="gray")
         agnostic_nms_desc.pack(anchor="w", padx=30, pady=(0, 10))
 
-        # 重置按钮
+        # 添加按钮框架 - 按钮并排放置
+        buttons_frame = ttk.Frame(self.advanced_frame)
+        buttons_frame.pack(fill="x", padx=PADDING, pady=PADDING)
+
+        # 查看参数说明按钮 (左侧)
+        help_button = ttk.Button(
+            buttons_frame, text="查看参数说明", command=self.show_params_help, width=BUTTON_WIDTH)
+        help_button.pack(side="left", padx=(0, 5))
+
+        # 恢复默认参数按钮 (右侧)
         reset_button = ttk.Button(
-            self.advanced_frame, text="恢复默认参数", command=self._reset_model_params, width=BUTTON_WIDTH)
-        reset_button.pack(anchor="e", padx=PADDING, pady=PADDING)
+            buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=BUTTON_WIDTH)
+        reset_button.pack(side="right")
 
         # 选项卡4：关于
         self.about_frame = ttk.Frame(self.notebook)
@@ -400,7 +407,7 @@ class ObjectDetectionGUI:
         # 创建一个顶层窗口
         help_window = tk.Toplevel(self.master)
         help_window.title("参数说明")
-        
+
         # 设置窗口尺寸
         width, height = 500, 400
         screen_width = self.master.winfo_screenwidth()
@@ -408,33 +415,33 @@ class ObjectDetectionGUI:
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         help_window.geometry(f"{width}x{height}+{x}+{y}")
-        
+
         # 设置窗口为模态，用户必须关闭此窗口才能继续操作主窗口
         help_window.transient(self.master)
         help_window.grab_set()
-        
+
         # 尝试设置相同的图标
         try:
             ico_path = resource_path(os.path.join("res", "ico.ico"))
             help_window.iconbitmap(ico_path)
         except Exception:
             pass
-        
+
         # 创建一个框架容器
         content_frame = ttk.Frame(help_window, padding=PADDING)
         content_frame.pack(fill="both", expand=True)
-        
+
         # 创建带滚动条的文本区域
         text_frame = ttk.Frame(content_frame)
         text_frame.pack(fill="both", expand=True, pady=(0, PADDING))
-        
+
         help_text = tk.Text(text_frame, wrap="word", font=NORMAL_FONT)
         help_scroll = ttk.Scrollbar(text_frame, orient="vertical", command=help_text.yview)
         help_text.configure(yscrollcommand=help_scroll.set)
-        
+
         help_scroll.pack(side="right", fill="y")
         help_text.pack(side="left", fill="both", expand=True)
-        
+
         # 设置参数说明文本
         param_help_text = """
 IOU阈值 (Intersection Over Union)
@@ -490,17 +497,17 @@ FP16加速 (半精度浮点数加速)
   - 在某些情况下可能导致错误分类的检测结果被保留
 适用场景：当单个物体可能被错误分类为多个类别时；当多个不同类别物体密集分布时
 """
-        
+
         help_text.insert("1.0", param_help_text.strip())
         help_text.configure(state="disabled")  # 设置为只读
-        
+
         # 添加关闭按钮
         close_button = ttk.Button(content_frame, text="关闭", command=help_window.destroy, width=BUTTON_WIDTH)
         close_button.pack(side="right")
-        
+
         # 确保弹窗在最前
         help_window.focus_set()
-        
+
         # 防止窗口被调整大小
         help_window.resizable(False, False)
 
@@ -511,8 +518,196 @@ FP16加速 (半精度浮点数加速)
         self.save_path_entry.bind("<Return>", self.save_save_path_by_enter)
         self.file_listbox.bind("<<ListboxSelect>>", self.on_file_selected)
 
+        # 绑定图像标签的双击事件
+        self.image_label.bind("<Double-1>", self.on_image_double_click)
+
         # 添加选项卡切换事件
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
+    def on_image_double_click(self, event) -> None:
+        """处理图像双击事件，放大显示图像"""
+        # 检查是否有图像显示
+        if not self.original_image or not self.current_image_path:
+            return
+
+        # 创建一个新窗口显示大图
+        zoom_window = tk.Toplevel(self.master)
+        zoom_window.title("图像放大查看")
+
+        # 设置窗口图标
+        try:
+            ico_path = resource_path(os.path.join("res", "ico.ico"))
+            zoom_window.iconbitmap(ico_path)
+        except Exception:
+            pass
+
+        # 准备图像 - 根据是否显示检测结果决定显示原图或检测结果图
+        if self.show_detection_var.get() and hasattr(self,
+                                                     'current_detection_results') and self.current_detection_results is not None:
+            # 显示检测结果图像
+            for result in self.current_detection_results:
+                result_img = result.plot()
+                result_img_rgb = cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB)
+                display_img = Image.fromarray(result_img_rgb)
+                break  # 只使用第一个结果
+        else:
+            # 显示原始图像
+            display_img = self.original_image
+
+        # 保存原始图像尺寸比例
+        orig_width, orig_height = display_img.size
+        aspect_ratio = orig_width / orig_height
+
+        # 计算窗口初始大小 - 屏幕尺寸的80%
+        screen_width = self.master.winfo_screenwidth()
+        screen_height = self.master.winfo_screenheight()
+        max_width = int(screen_width * 0.8)
+        max_height = int(screen_height * 0.8)
+
+        # 按比例计算初始窗口大小
+        if aspect_ratio > 1:  # 宽图
+            window_width = min(max_width, orig_width)
+            window_height = int(window_width / aspect_ratio)
+            if window_height > max_height:
+                window_height = max_height
+                window_width = int(window_height * aspect_ratio)
+        else:  # 高图
+            window_height = min(max_height, orig_height)
+            window_width = int(window_height * aspect_ratio)
+            if window_width > max_width:
+                window_width = max_width
+                window_height = int(window_width / aspect_ratio)
+
+        # 设置窗口大小和位置
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        zoom_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+
+        # 允许窗口大小调整
+        zoom_window.resizable(True, True)
+
+        # 创建Canvas以实现完美居中
+        canvas = tk.Canvas(zoom_window, highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+
+        # 初始显示图像
+        resized_img = display_img.resize((window_width, window_height), Image.LANCZOS)
+        photo = ImageTk.PhotoImage(resized_img)
+
+        # 保存原始图像和必要的引用
+        canvas.original_img = display_img
+        canvas.aspect_ratio = aspect_ratio
+        canvas.current_img = resized_img  # 保存当前显示的图像
+        canvas.image = photo
+        canvas.zoom_level = 1.0  # 初始缩放级别
+
+        # 在Canvas中心创建图像
+        canvas.img_id = canvas.create_image(window_width // 2, window_height // 2, image=photo)
+
+        # 窗口大小变化事件处理
+        def on_window_resize(event):
+            # 只处理窗口大小变化事件
+            if event.widget == zoom_window:
+                # 确保窗口已完全初始化
+                zoom_window.update_idletasks()
+
+                # 获取当前窗口可用空间
+                available_width = canvas.winfo_width()
+                available_height = canvas.winfo_height()
+
+                if available_width <= 10 or available_height <= 10:
+                    return  # 避免无效的尺寸
+
+                # 重设缩放级别为1.0（适应窗口）
+                canvas.zoom_level = 1.0
+
+                # 根据宽高比计算实际使用的尺寸
+                ar = canvas.aspect_ratio
+
+                # 确定哪个维度是限制因素
+                if available_width / ar <= available_height:
+                    # 宽度是限制因素
+                    new_width = available_width
+                    new_height = int(new_width / ar)
+                else:
+                    # 高度是限制因素
+                    new_height = available_height
+                    new_width = int(new_height * ar)
+
+                # 重新调整图像大小以适应窗口，保持宽高比
+                resized = canvas.original_img.resize((new_width, new_height), Image.LANCZOS)
+                canvas.current_img = resized  # 更新当前图像
+                new_photo = ImageTk.PhotoImage(resized)
+                canvas.itemconfig(canvas.img_id, image=new_photo)
+                canvas.image = new_photo  # 保持引用
+
+                # 重新定位图像到Canvas中心
+                canvas.coords(canvas.img_id, available_width // 2, available_height // 2)
+
+        # 鼠标滚轮事件处理，用于缩放图像
+        def on_mousewheel(event):
+            # 确定缩放方向
+            if event.delta > 0:
+                # 放大图像
+                zoom_factor = 1.1
+                canvas.zoom_level *= zoom_factor
+            else:
+                # 缩小图像
+                zoom_factor = 0.9
+                canvas.zoom_level *= zoom_factor
+
+            # 限制缩放级别范围，防止过度缩放
+            if canvas.zoom_level < 0.1:
+                canvas.zoom_level = 0.1
+            elif canvas.zoom_level > 5.0:
+                canvas.zoom_level = 5.0
+
+            # 获取当前窗口大小
+            available_width = canvas.winfo_width()
+            available_height = canvas.winfo_height()
+
+            # 根据窗口大小和宽高比计算基础大小
+            ar = canvas.aspect_ratio
+            if available_width / ar <= available_height:
+                base_width = available_width
+                base_height = int(base_width / ar)
+            else:
+                base_height = available_height
+                base_width = int(base_height * ar)
+
+            # 应用缩放系数计算新大小
+            new_width = int(base_width * canvas.zoom_level)
+            new_height = int(base_height * canvas.zoom_level)
+
+            # 重新调整图像大小
+            resized = canvas.original_img.resize((new_width, new_height), Image.LANCZOS)
+            canvas.current_img = resized
+            new_photo = ImageTk.PhotoImage(resized)
+            canvas.itemconfig(canvas.img_id, image=new_photo)
+            canvas.image = new_photo  # 保持引用
+
+            # 保持图像在Canvas中心
+            canvas.coords(canvas.img_id, available_width // 2, available_height // 2)
+
+            # 显示当前缩放级别在标题栏
+            zoom_window.title(f"图像放大查看 - 缩放: {canvas.zoom_level:.1f}x")
+
+        # 绑定事件
+        canvas.bind("<MouseWheel>", on_mousewheel)  # Windows系统滚轮事件
+        canvas.bind("<Button-4>", lambda e: on_mousewheel(type('Event', (), {'delta': 120})))  # Linux上滚
+        canvas.bind("<Button-5>", lambda e: on_mousewheel(type('Event', (), {'delta': -120})))  # Linux下滚
+        zoom_window.bind("<Configure>", on_window_resize)
+
+        # 添加ESC键关闭窗口的功能
+        def close_on_escape(event):
+            if event.keysym == 'Escape':
+                zoom_window.destroy()
+
+        zoom_window.bind('<Key>', close_on_escape)
+
+        # 确保窗口在最前
+        zoom_window.focus_set()
+        zoom_window.transient(self.master)  # 设置为主窗口的临时窗口
 
     def on_tab_changed(self, event) -> None:
         """处理选项卡切换事件"""
@@ -592,12 +787,14 @@ FP16加速 (半精度浮点数加速)
         file_name = self.file_listbox.get(selection[0])
         file_path = os.path.join(self.file_path_entry.get(), file_name)
 
+        # 保存当前图像路径
+        self.current_image_path = file_path
+
         # 更新预览图像
         self.update_image_preview(file_path)
 
         # 更新图像信息
         self.update_image_info(file_path, file_name)
-
 
     def update_image_preview(self, file_path: str, show_detection: bool = False, detection_results=None) -> None:
         """更新图像预览
@@ -622,6 +819,9 @@ FP16加速 (半精度浮点数加速)
                 # 显示原始图像
                 img = Image.open(file_path)
 
+            # 保存原始图像，用于双击放大
+            self.original_image = img
+
             # 计算调整大小的比例，以适应预览区域
             max_width = 400
             max_height = 300
@@ -642,6 +842,7 @@ FP16加速 (半精度浮点数加速)
         except Exception as e:
             logger.error(f"更新图像预览失败: {e}")
             self.image_label.config(image='', text="无法加载图像")
+            self.original_image = None
 
     def update_image_info(self, file_path: str, file_name: str) -> None:
         """更新图像信息"""
@@ -653,23 +854,26 @@ FP16加速 (半精度浮点数加速)
             self.info_text.config(state="normal")
             self.info_text.delete(1.0, tk.END)
 
-            info_text = f"文件名: {image_info.get('文件名', '')}\n"
-            info_text += f"格式: {image_info.get('格式', '')}\n"
+            # 第一行信息
+            info_text = f"文件名: {image_info.get('文件名', '')}    格式: {image_info.get('格式', '')}"
 
+            # 第二行信息
+            info_text2 = ""
             if image_info.get('拍摄日期'):
-                info_text += f"拍摄日期: {image_info.get('拍摄日期')} {image_info.get('拍摄时间', '')}\n"
+                info_text2 += f"拍摄日期: {image_info.get('拍摄日期')} {image_info.get('拍摄时间', '')}    "
             else:
-                info_text += "拍摄日期: 未知\n"
+                info_text2 += "拍摄日期: 未知    "
 
             # 添加图像尺寸信息
             try:
                 with Image.open(file_path) as img:
-                    info_text += f"尺寸: {img.width} x {img.height} 像素\n"
-                    info_text += f"文件大小: {os.path.getsize(file_path) / 1024:.1f} KB"
+                    info_text2 += f"尺寸: {img.width} x {img.height} 像素    "
+                    info_text2 += f"文件大小: {os.path.getsize(file_path) / 1024:.1f} KB"
             except:
                 pass
 
-            self.info_text.insert(tk.END, info_text)
+            # 插入文本内容（两行）
+            self.info_text.insert(tk.END, info_text + "\n" + info_text2)
             self.info_text.config(state="disabled")
         except Exception as e:
             logger.error(f"更新图像信息失败: {e}")
@@ -1043,26 +1247,32 @@ FP16加速 (半精度浮点数加速)
         """
         self.info_text.config(state="normal")
 
-        # 保留原始信息，添加检测结果
-        current_text = self.info_text.get(1.0, tk.END)
+        # 获取当前文本
+        current_text = self.info_text.get(1.0, tk.END).strip()
 
         # 在文本末尾添加检测信息
-        detection_info = "\n\n检测结果:\n"
+        detection_parts = ["检测结果:"]
         if species_info['物种名称']:
             species_names = species_info['物种名称'].split(',')
             species_counts = species_info['物种数量'].split(',')
 
+            species_info_parts = []
             for i, (name, count) in enumerate(zip(species_names, species_counts)):
-                detection_info += f"- {name}: {count}只\n"
+                species_info_parts.append(f"{name}: {count}只")
+            detection_parts.append(", ".join(species_info_parts))
 
             if species_info['最低置信度']:
-                detection_info += f"\n最低置信度: {species_info['最低置信度']}"
+                detection_parts.append(f"最低置信度: {species_info['最低置信度']}")
         else:
-            detection_info += "未检测到已知物种"
+            detection_parts.append("未检测到已知物种")
+
+        # 创建新的文本内容
+        detection_info = " | ".join(detection_parts)
+        new_text = current_text + "\n" + detection_info
 
         # 设置新的文本内容
         self.info_text.delete(1.0, tk.END)
-        self.info_text.insert(tk.END, current_text.strip() + detection_info)
+        self.info_text.insert(tk.END, new_text)
         self.info_text.config(state="disabled")
 
     def _update_iou_label(self, value) -> None:
@@ -1079,7 +1289,7 @@ FP16加速 (半精度浮点数加速)
         """重置模型参数到默认值"""
         self.iou_var.set(0.3)
         self.conf_var.set(0.25)
-        self.use_fp16_var.set(True)
+        self.use_fp16_var.set(False)
         self.use_augment_var.set(True)
         self.use_agnostic_nms_var.set(True)
 
