@@ -38,8 +38,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 配置常量
-APP_TITLE = "物种信息检测 v4.4"
-APP_VERSION = "4.4.0"
+APP_TITLE = "物种信息检测 v4.5"
+APP_VERSION = "4.5.1"
 DEFAULT_EXCEL_FILENAME = "物种检测信息.xlsx"
 SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.webp')
 DATE_FORMATS = ['%Y:%m:%d %H:%M:%S', '%Y:%d:%m %H:%M:%S', '%Y-%m-%d %H:%M:%S']
@@ -469,8 +469,8 @@ class ObjectDetectionGUI:
 
         # 设置窗口图标
         try:
-            ico_path = resource_path(os.path.join("res", "ico.ico"))
-            master.iconbitmap(ico_path)
+            self.ico_path = resource_path(os.path.join("res", "ico.ico"))
+            master.iconbitmap(self.ico_path)
         except Exception as e:
             logger.warning(f"无法加载窗口图标: {e}")
 
@@ -732,35 +732,19 @@ class ObjectDetectionGUI:
             foreground="gray")
         agnostic_nms_desc.pack(anchor="w", padx=30, pady=(0, 10))
 
-        # 参数说明
-        explanation_frame = ttk.LabelFrame(self.advanced_frame, text="参数说明")
-        explanation_frame.pack(fill="x", padx=PADDING, pady=PADDING)
+        # 创建按钮框架，将参数说明按钮和重置按钮放在同一行
+        buttons_frame = ttk.Frame(self.advanced_frame)
+        buttons_frame.pack(fill="x", padx=PADDING, pady=PADDING)
 
-        explanation_text = """
-            IOU阈值：控制边界框的重叠程度，值越低检出的框越多，可能导致重复检测；值越高检出的框越少，可能导致漏检。
+        # 添加查看参数说明按钮
+        help_button = ttk.Button(
+            buttons_frame, text="查看参数说明", command=self.show_param_explanation, width=BUTTON_WIDTH)
+        help_button.pack(side="left", padx=PADDING)
 
-            置信度阈值：控制检测结果的可信度，值越低检出更多低置信度目标，可能增加误检；值越高仅保留高置信度目标，可能导致漏检。
-
-            FP16加速：使用半精度浮点数进行计算，可提高20-50%的速度，但在某些场景可能略微减少精度。
-
-            数据增强：在检测过程中应用多种变换以提高准确性，但会减慢处理速度，对复杂场景有帮助。
-
-            类别无关NMS：在消除重复边界框时忽略类别信息，对同一位置可能出现多种类别的场景有帮助。
-            """
-
-        explanation_label = ttk.Label(
-            explanation_frame,
-            text=explanation_text.strip(),
-            wraplength=600,
-            justify="left",
-            padding=PADDING
-        )
-        explanation_label.pack(anchor="w", padx=5, pady=5)
-
-        # 重置按钮
+        # 添加恢复默认参数按钮
         reset_button = ttk.Button(
-            self.advanced_frame, text="恢复默认参数", command=self._reset_model_params, width=BUTTON_WIDTH)
-        reset_button.pack(anchor="e", padx=PADDING, pady=PADDING)
+            buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=BUTTON_WIDTH)
+        reset_button.pack(side="right", padx=PADDING)
 
         # 选项卡4：关于
         self.about_frame = ttk.Frame(self.notebook)
@@ -804,7 +788,7 @@ class ObjectDetectionGUI:
         # 当前用户
         user_label = ttk.Label(
             about_content,
-            text=f"当前用户: {os.environ.get('USERNAME', 'wakin721')}",
+            text="作者:和錦わきん",
             font=SMALL_FONT
         )
         user_label.pack()
@@ -1493,6 +1477,63 @@ class ObjectDetectionGUI:
         self._update_conf_label(0.25)
 
         messagebox.showinfo("参数重置", "模型参数已恢复为默认值")
+
+    def show_param_explanation(self) -> None:
+        """显示参数说明弹窗"""
+        explanation_text = """
+        IOU阈值：控制边界框的重叠程度，值越低检出的框越多，可能导致重复检测；值越高检出的框越少，可能导致漏检。
+
+        置信度阈值：控制检测结果的可信度，值越低检出更多低置信度目标，可能增加误检；值越高仅保留高置信度目标，可能导致漏检。
+
+        FP16加速：使用半精度浮点数进行计算，可提高20-50%的速度，但在某些场景可能略微减少精度。
+
+        数据增强：在检测过程中应用多种变换以提高准确性，但会减慢处理速度，对复杂场景有帮助。
+
+        类别无关NMS：在消除重复边界框时忽略类别信息，对同一位置可能出现多种类别的场景有帮助。
+        """
+
+        # 创建弹窗
+        explanation_window = tk.Toplevel(self.master)
+        explanation_window.title("参数说明")
+        explanation_window.iconbitmap(self.ico_path)
+
+        # 设置模态窗口（阻止与其他窗口的交互，直到此窗口关闭）
+        explanation_window.grab_set()
+
+        # 窗口大小和位置
+        window_width, window_height = 500, 350
+        screen_width = explanation_window.winfo_screenwidth()
+        screen_height = explanation_window.winfo_screenheight()
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        explanation_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+
+        # 创建一个框架来容纳文本区域和滚动条
+        frame = tk.Frame(explanation_window)
+        frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # 创建说明文本区域
+        text_area = tk.Text(frame, wrap="word", font=NORMAL_FONT, padx=15, pady=15)
+
+        # 添加滚动条 - 注意滚动条现在是frame的子组件，而不是text_area的子组件
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=text_area.yview)
+
+        # 设置滚动条和文本区域的位置关系
+        scrollbar.pack(side="right", fill="y")
+        text_area.pack(side="left", fill="both", expand=True)
+
+        # 连接滚动条和文本区域
+        text_area.config(yscrollcommand=scrollbar.set)
+
+        # 插入说明文本
+        text_area.insert("1.0", explanation_text.strip())
+        text_area.config(state="disabled")  # 使文本只读
+
+        # 底部关闭按钮
+        close_button = ttk.Button(explanation_window, text="关闭",
+                                  command=explanation_window.destroy,
+                                  width=BUTTON_WIDTH)
+        close_button.pack(pady=(0, 15))
 
 def main():
     """程序入口点"""
