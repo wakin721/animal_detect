@@ -377,7 +377,7 @@ class ObjectDetectionGUI:
         # 当前用户
         user_label = ttk.Label(
             about_content,
-            text=f"当前用户: {os.environ.get('USERNAME', 'wakin721')}",
+            text="作者：和錦わきん",
             font=SMALL_FONT
         )
         user_label.pack()
@@ -586,7 +586,7 @@ FP16加速 (半精度浮点数加速)
         # 允许窗口大小调整
         zoom_window.resizable(True, True)
 
-        # 创建Canvas以实现完美居中
+        # 创建Canvas以实现完美居中和拖动功能
         canvas = tk.Canvas(zoom_window, highlightthickness=0)
         canvas.pack(fill="both", expand=True)
 
@@ -600,6 +600,11 @@ FP16加速 (半精度浮点数加速)
         canvas.current_img = resized_img  # 保存当前显示的图像
         canvas.image = photo
         canvas.zoom_level = 1.0  # 初始缩放级别
+
+        # 用于图像拖动的变量
+        canvas.drag_data = {"x": 0, "y": 0, "dragging": False}
+        canvas.offset_x = 0  # 图像X偏移量
+        canvas.offset_y = 0  # 图像Y偏移量
 
         # 在Canvas中心创建图像
         canvas.img_id = canvas.create_image(window_width // 2, window_height // 2, image=photo)
@@ -620,6 +625,10 @@ FP16加速 (半精度浮点数加速)
 
                 # 重设缩放级别为1.0（适应窗口）
                 canvas.zoom_level = 1.0
+
+                # 重置偏移量
+                canvas.offset_x = 0
+                canvas.offset_y = 0
 
                 # 根据宽高比计算实际使用的尺寸
                 ar = canvas.aspect_ratio
@@ -686,16 +695,99 @@ FP16加速 (半精度浮点数加速)
             canvas.itemconfig(canvas.img_id, image=new_photo)
             canvas.image = new_photo  # 保持引用
 
-            # 保持图像在Canvas中心
-            canvas.coords(canvas.img_id, available_width // 2, available_height // 2)
+            # 确保偏移量在缩小时不超出图像边界
+            if canvas.zoom_level <= 1.0:
+                # 如果缩放级别小于等于1.0，则重置偏移量
+                canvas.offset_x = 0
+                canvas.offset_y = 0
+            else:
+                # 当缩放时，限制偏移量以防止图像超出可见区域
+                max_offset_x = (new_width - base_width) // 2
+                max_offset_y = (new_height - base_height) // 2
+
+                # 限制偏移量在允许范围内
+                canvas.offset_x = max(-max_offset_x, min(max_offset_x, canvas.offset_x))
+                canvas.offset_y = max(-max_offset_y, min(max_offset_y, canvas.offset_y))
+
+            # 计算图像位置，应用偏移量
+            x_pos = available_width // 2 - canvas.offset_x
+            y_pos = available_height // 2 - canvas.offset_y
+            canvas.coords(canvas.img_id, x_pos, y_pos)
 
             # 显示当前缩放级别在标题栏
             zoom_window.title(f"图像放大查看 - 缩放: {canvas.zoom_level:.1f}x")
+
+            # 更新光标样式
+            update_cursor_style()
+
+        # 鼠标拖动相关函数
+        def on_drag_start(event):
+            # 当开始拖动时记录鼠标位置
+            if canvas.zoom_level > 1.0:  # 只在放大状态下允许拖动
+                canvas.drag_data["x"] = event.x
+                canvas.drag_data["y"] = event.y
+                canvas.drag_data["dragging"] = True
+                # 改变光标样式为抓手
+                canvas.config(cursor="fleur")  # 抓手光标
+
+        def on_drag_motion(event):
+            # 拖动过程中移动图像
+            if canvas.drag_data["dragging"] and canvas.zoom_level > 1.0:
+                # 计算鼠标移动的距离
+                dx = event.x - canvas.drag_data["x"]
+                dy = event.y - canvas.drag_data["y"]
+
+                # 更新鼠标位置
+                canvas.drag_data["x"] = event.x
+                canvas.drag_data["y"] = event.y
+
+                # 更新偏移量
+                canvas.offset_x -= dx
+                canvas.offset_y -= dy
+
+                # 获取当前窗口大小
+                available_width = canvas.winfo_width()
+                available_height = canvas.winfo_height()
+
+                # 获取当前图像尺寸
+                img_width = canvas.current_img.width
+                img_height = canvas.current_img.height
+
+                # 计算最大允许偏移量
+                max_offset_x = max(0, (img_width - available_width) // 2)
+                max_offset_y = max(0, (img_height - available_height) // 2)
+
+                # 限制偏移量在允许范围内
+                canvas.offset_x = max(-max_offset_x, min(max_offset_x, canvas.offset_x))
+                canvas.offset_y = max(-max_offset_y, min(max_offset_y, canvas.offset_y))
+
+                # 应用偏移量更新图像位置
+                x_pos = available_width // 2 - canvas.offset_x
+                y_pos = available_height // 2 - canvas.offset_y
+                canvas.coords(canvas.img_id, x_pos, y_pos)
+
+        def on_drag_stop(event):
+            # 停止拖动
+            canvas.drag_data["dragging"] = False
+            # 恢复正常光标或根据缩放状态设置光标
+            update_cursor_style()
+
+        def update_cursor_style():
+            # 根据缩放状态更新光标样式
+            if canvas.zoom_level > 1.0:
+                # 缩放大于1.0时使用移动光标提示可拖动
+                canvas.config(cursor="hand2")  # 或使用"fleur"作为抓手光标
+            else:
+                # 缩放小于等于1.0时使用默认光标
+                canvas.config(cursor="")
 
         # 绑定事件
         canvas.bind("<MouseWheel>", on_mousewheel)  # Windows系统滚轮事件
         canvas.bind("<Button-4>", lambda e: on_mousewheel(type('Event', (), {'delta': 120})))  # Linux上滚
         canvas.bind("<Button-5>", lambda e: on_mousewheel(type('Event', (), {'delta': -120})))  # Linux下滚
+        canvas.bind("<ButtonPress-1>", on_drag_start)  # 鼠标左键按下开始拖动
+        canvas.bind("<B1-Motion>", on_drag_motion)  # 按住左键移动进行拖动
+        canvas.bind("<ButtonRelease-1>", on_drag_stop)  # 释放左键停止拖动
         zoom_window.bind("<Configure>", on_window_resize)
 
         # 添加ESC键关闭窗口的功能
@@ -704,6 +796,9 @@ FP16加速 (半精度浮点数加速)
                 zoom_window.destroy()
 
         zoom_window.bind('<Key>', close_on_escape)
+
+        # 初始化光标样式
+        update_cursor_style()
 
         # 确保窗口在最前
         zoom_window.focus_set()
