@@ -1,5 +1,5 @@
 """
-GUI模块 - 提供应用程序主界面和交互逻辑
+GUI模块 - 提供应用程序主界面和交互逻辑 (添加处理进度缓存功能)
 """
 
 import os
@@ -11,7 +11,9 @@ from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
 import cv2
 from shutil import copy
-from typing import Dict, List, Optional
+import json
+from datetime import datetime
+from typing import Dict, List, Optional, Any
 
 import sv_ttk  # Sun Valley ttk theme for Windows 11 style
 
@@ -24,20 +26,34 @@ from system.image_processor import ImageProcessor
 from system.metadata_extractor import ImageMetadataExtractor
 from system.data_processor import DataProcessor
 from system.ui_components import ModernFrame, InfoBar, SpeedProgressBar
+from system.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
 class ObjectDetectionGUI:
     """物种检测GUI应用程序 - Windows 11风格界面"""
 
-    def __init__(self, master: tk.Tk):
+    def __init__(self, master: tk.Tk, settings_manager: Optional[SettingsManager] = None,
+                 settings: Optional[Dict[str, Any]] = None, cache_data: Optional[Dict[str, Any]] = None,
+                 resume_processing: bool = False):
         """初始化GUI应用
 
         Args:
             master: Tkinter主窗口
+            settings_manager: 设置管理器实例
+            settings: 加载的设置数据
+            cache_data: 处理缓存数据
+            resume_processing: 是否继续上次的处理
         """
         self.master = master
         master.title(APP_TITLE)
+
+        # 保存设置管理器
+        self.settings_manager = settings_manager
+
+        # 缓存数据和恢复标志
+        self.cache_data = cache_data
+        self.resume_processing = resume_processing
 
         # 应用Windows 11主题
         sv_ttk.set_theme("light")
@@ -69,8 +85,16 @@ class ObjectDetectionGUI:
         self.original_image = None  # 保存原始图像
         self.current_image_path = None  # 保存当前图像路径
 
+        # 处理进度缓存相关变量
+        self.cache_interval = 10  # 每处理10张图片保存一次缓存
+        self.excel_data = []  # 保存处理结果数据
+
         # 创建GUI元素
         self._create_ui_elements()
+
+        # 加载设置到UI
+        if settings:
+            self._load_settings_to_ui(settings)
 
         # 绑定事件
         self._bind_events()
@@ -79,6 +103,49 @@ class ObjectDetectionGUI:
         if not self.image_processor.model:
             messagebox.showerror("错误", "模型文件未找到。请检查应用程序目录中的模型文件。")
             self.start_stop_button["state"] = "disabled"
+
+        # 如果需要继续上次处理，自动开始处理
+        if self.resume_processing and self.cache_data:
+            # 设置延迟，确保UI已完全加载
+            self.master.after(1000, self._resume_processing)
+
+    def _resume_processing(self) -> None:
+        """继续上次未完成的处理任务"""
+        if not self.cache_data:
+            return
+
+        # 从缓存中恢复数据
+        file_path = self.cache_data.get('file_path', '')
+        save_path = self.cache_data.get('save_path', '')
+        save_detect_image = self.cache_data.get('save_detect_image', True)
+        output_excel = self.cache_data.get('output_excel', True)
+        copy_img = self.cache_data.get('copy_img', False)
+        use_fp16 = self.cache_data.get('use_fp16', False)
+        processed_files = self.cache_data.get('processed_files', 0)
+        self.excel_data = self.cache_data.get('excel_data', [])
+
+        # 检查路径是否有效
+        if not self._validate_inputs(file_path, save_path):
+            return
+
+        # 更新UI
+        self.file_path_entry.delete(0, tk.END)
+        self.file_path_entry.insert(0, file_path)
+        self.save_path_entry.delete(0, tk.END)
+        self.save_path_entry.insert(0, save_path)
+        self.save_detect_image_var.set(save_detect_image)
+        self.output_excel_var.set(output_excel)
+        self.copy_img_var.set(copy_img)
+        self.use_fp16_var.set(use_fp16)
+
+        # 更新文件列表
+        self.update_file_list(file_path)
+
+        # 显示继续处理的消息
+        self.status_bar.status_label.config(text=f"准备继续处理，已处理: {processed_files} 张")
+
+        # 自动开始处理
+        self.start_processing(resume_from=processed_files)
 
     def _create_ui_elements(self) -> None:
         """创建GUI界面元素"""
@@ -524,6 +591,29 @@ FP16加速 (半精度浮点数加速)
         # 添加选项卡切换事件
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
+        # 添加显示检测结果开关的变量跟踪
+        self.show_detection_var.trace("w", self._detection_switch_changed)
+
+        # 添加设置保存事件
+        self.file_path_entry.bind("<FocusOut>", lambda e: self._save_current_settings())
+        self.save_path_entry.bind("<FocusOut>", lambda e: self._save_current_settings())
+
+        # 选项变量的追踪
+        self.save_detect_image_var.trace("w", lambda *args: self._save_current_settings())
+        self.output_excel_var.trace("w", lambda *args: self._save_current_settings())
+        self.copy_img_var.trace("w", lambda *args: self._save_current_settings())
+        self.use_fp16_var.trace("w", lambda *args: self._save_current_settings())
+        self.iou_var.trace("w", lambda *args: self._save_current_settings())
+        self.conf_var.trace("w", lambda *args: self._save_current_settings())
+        self.use_augment_var.trace("w", lambda *args: self._save_current_settings())
+        self.use_agnostic_nms_var.trace("w", lambda *args: self._save_current_settings())
+
+    def _detection_switch_changed(self, *args) -> None:
+        """处理显示检测结果开关变化"""
+        # 如果正在处理且用户试图关闭显示，则强制保持打开
+        if self.is_processing and not self.show_detection_var.get():
+            self.show_detection_var.set(True)
+
     def on_image_double_click(self, event) -> None:
         """处理图像双击事件，放大显示图像"""
         # 检查是否有图像显示
@@ -820,11 +910,107 @@ FP16加速 (半精度浮点数加速)
                     self.file_listbox.selection_set(0)
                     self.on_file_selected(None)
 
+    def _get_current_settings(self) -> Dict[str, Any]:
+        """获取当前UI中的所有设置
+
+        Returns:
+            设置字典
+        """
+        settings = {
+            "file_path": self.file_path_entry.get(),
+            "save_path": self.save_path_entry.get(),
+            "save_detect_image": self.save_detect_image_var.get(),
+            "output_excel": self.output_excel_var.get(),
+            "copy_img": self.copy_img_var.get(),
+            "use_fp16": self.use_fp16_var.get(),
+            "iou": self.iou_var.get(),
+            "conf": self.conf_var.get(),
+            "use_augment": self.use_augment_var.get(),
+            "use_agnostic_nms": self.use_agnostic_nms_var.get()
+        }
+        return settings
+
+    def _save_current_settings(self) -> None:
+        """保存当前设置到JSON文件"""
+        if not self.settings_manager or not hasattr(self.settings_manager, 'save_settings'):
+            logger.warning("设置管理器未正确初始化，无法保存设置")
+            return
+
+        settings = self._get_current_settings()
+        success = self.settings_manager.save_settings(settings)
+
+        if success:
+            logger.info("设置已保存")
+            # 可选: 在状态栏显示保存成功信息
+            # self.status_bar.status_label.config(text="设置已保存")
+
+    def _load_settings_to_ui(self, settings: Dict[str, Any]) -> None:
+        """将设置应用到UI元素
+
+        Args:
+            settings: 设置字典
+        """
+        try:
+            # 设置路径
+            if "file_path" in settings and settings["file_path"] and os.path.exists(settings["file_path"]):
+                self.file_path_entry.delete(0, tk.END)
+                self.file_path_entry.insert(0, settings["file_path"])
+                # 如果是目录，更新文件列表
+                if os.path.isdir(settings["file_path"]):
+                    self.update_file_list(settings["file_path"])
+
+            if "save_path" in settings and settings["save_path"]:
+                self.save_path_entry.delete(0, tk.END)
+                self.save_path_entry.insert(0, settings["save_path"])
+
+            # 设置功能选项
+            if "save_detect_image" in settings:
+                self.save_detect_image_var.set(settings["save_detect_image"])
+
+            if "output_excel" in settings:
+                self.output_excel_var.set(settings["output_excel"])
+
+            if "copy_img" in settings:
+                self.copy_img_var.set(settings["copy_img"])
+
+            # 设置高级选项
+            if "use_fp16" in settings:
+                self.use_fp16_var.set(settings["use_fp16"])
+
+            if "iou" in settings:
+                self.iou_var.set(settings["iou"])
+                self._update_iou_label(settings["iou"])
+
+            if "conf" in settings:
+                self.conf_var.set(settings["conf"])
+                self._update_conf_label(settings["conf"])
+
+            if "use_augment" in settings:
+                self.use_augment_var.set(settings["use_augment"])
+
+            if "use_agnostic_nms" in settings:
+                self.use_agnostic_nms_var.set(settings["use_agnostic_nms"])
+
+            logger.info("设置已加载到UI")
+        except Exception as e:
+            logger.error(f"加载设置到UI失败: {e}")
+
     def on_closing(self) -> None:
         """窗口关闭事件处理"""
         if self.is_processing:
-            if not messagebox.askyesno("警告", "处理正在进行中，确定要退出程序吗？"):
+            if not messagebox.askyesno("警告",
+                                       "处理正在进行中，确定要退出程序吗？\n处理进度将会保存，下次启动时可以继续。"):
                 return
+
+            # 停止处理但不删除缓存
+            self.processing_stop_flag.set()
+
+        # 保存当前设置，添加防错处理
+        try:
+            if hasattr(self, '_save_current_settings'):
+                self._save_current_settings()
+        except Exception as e:
+            logger.error(f"保存设置时出错: {e}")
 
         self.master.destroy()
 
@@ -1005,15 +1191,19 @@ FP16加速 (半精度浮点数加速)
         else:
             self.stop_processing()
 
-    def start_processing(self) -> None:
-        """开始处理图像"""
+    def start_processing(self, resume_from=0):
+        """开始处理图像
+
+        Args:
+            resume_from: 从第几张图片开始处理，用于继续上次未完成的处理
+        """
         # 获取配置
         file_path = self.file_path_entry.get()
         save_path = self.save_path_entry.get()
         save_detect_image = self.save_detect_image_var.get()
         output_excel = self.output_excel_var.get()
         copy_img = self.copy_img_var.get()
-        use_fp16 = self.use_fp16_var.get()  # 从高级设置中获取FP16设置
+        use_fp16 = self.use_fp16_var.get()
 
         # 验证输入
         if not self._validate_inputs(file_path, save_path):
@@ -1030,16 +1220,20 @@ FP16加速 (半精度浮点数加速)
         # 切换到图像预览选项卡
         self.notebook.select(1)
 
+        # 如果不是继续处理，则清空excel_data
+        if resume_from == 0:
+            self.excel_data = []
+
         # 启动处理线程
         threading.Thread(
             target=self._process_images_thread,
-            args=(file_path, save_path, save_detect_image, output_excel, copy_img, use_fp16),  # 传递FP16设置
+            args=(file_path, save_path, save_detect_image, output_excel, copy_img, use_fp16, resume_from),
             daemon=True
         ).start()
 
-    def stop_processing(self) -> None:
+    def stop_processing(self):
         """停止处理图像"""
-        if messagebox.askyesno("停止确认", "确定要停止图像处理吗？"):
+        if messagebox.askyesno("停止确认", "确定要停止图像处理吗？\n处理进度将被保存，下次可以继续。"):
             self.processing_stop_flag.set()
             self.status_bar.status_label.config(text="正在停止处理...")
         else:
@@ -1095,6 +1289,12 @@ FP16加速 (半精度浮点数加速)
                            self.save_path_entry, self.save_path_button):
                 widget["state"] = "disabled"
 
+            # 禁用"检测当前图像"按钮
+            self.detect_button["state"] = "disabled"
+
+            # 自动打开"显示检测结果"开关
+            self.show_detection_var.set(True)
+
             # 禁用选项卡
             self.notebook.tab(0, state="disabled")
             self.notebook.tab(2, state="disabled")
@@ -1109,6 +1309,9 @@ FP16加速 (半精度浮点数加速)
                            self.save_path_entry, self.save_path_button):
                 widget["state"] = "normal"
 
+            # 重新启用"检测当前图像"按钮
+            self.detect_button["state"] = "normal"
+
             # 启用选项卡
             self.notebook.tab(0, state="normal")
             self.notebook.tab(2, state="normal")
@@ -1116,7 +1319,7 @@ FP16加速 (半精度浮点数加速)
 
     def _process_images_thread(self, file_path: str, save_path: str,
                                save_detect_image: bool, output_excel: bool,
-                               copy_img: bool, use_fp16: bool) -> None:
+                               copy_img: bool, use_fp16: bool, resume_from: int = 0) -> None:
         """图像处理线程
 
         Args:
@@ -1126,12 +1329,14 @@ FP16加速 (半精度浮点数加速)
             output_excel: 是否输出Excel表格
             copy_img: 是否按物种分类复制图片
             use_fp16: 是否使用FP16加速推理
+            resume_from: 从第几张图片开始处理，用于继续上次未完成的处理
         """
         start_time = time.time()
-        excel_data = []
-        processed_files = 0
+        excel_data = [] if resume_from == 0 else getattr(self, 'excel_data', [])
+        processed_files = resume_from
         stopped_manually = False
         earliest_date = None
+        cache_interval = 10  # 每处理10张图片保存一次缓存
 
         try:
             # 获取高级设置参数
@@ -1155,6 +1360,17 @@ FP16加速 (半精度浮点数加速)
                 self.status_bar.status_label.config(text="未找到任何图片文件。")
                 messagebox.showinfo("提示", "在指定路径下未找到任何图片文件。")
                 return
+
+            # 如果是继续处理，从上次处理的位置开始
+            if resume_from > 0 and resume_from < total_files:
+                image_files = image_files[resume_from:]
+
+                # 如果有已处理的数据，找出最早的日期
+                if excel_data:
+                    for item in excel_data:
+                        if item.get('拍摄日期对象'):
+                            if earliest_date is None or item['拍摄日期对象'] < earliest_date:
+                                earliest_date = item['拍摄日期对象']
 
             # 处理每张图片
             for filename in image_files:
@@ -1199,6 +1415,7 @@ FP16加速 (半精度浮点数加速)
 
                     # 更新预览图像 - 显示检测结果
                     detect_results = species_info['detect_results']
+                    self.current_detection_results = detect_results  # 保存当前检测结果
                     self.master.after(0, lambda p=img_path, d=detect_results:
                     self.update_image_preview(p, True, d))
 
@@ -1226,6 +1443,71 @@ FP16加速 (半精度浮点数加速)
                 processed_files += 1
                 self._update_progress(processed_files, total_files, start_time)
 
+                # 每处理cache_interval张图片保存一次缓存
+                if processed_files % cache_interval == 0:
+                    try:
+                        # 确保temp目录存在
+                        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+                        if not os.path.exists(temp_dir):
+                            os.makedirs(temp_dir)
+
+                        cache_file = os.path.join(temp_dir, "cache.json")
+
+                        # 处理excel_data中的不可序列化对象
+                        serializable_excel_data = []
+                        for item in excel_data:
+                            serializable_item = {}
+                            for key, value in item.items():
+                                # 处理datetime对象
+                                if isinstance(value, datetime):
+                                    serializable_item[key] = value.isoformat()
+                                # 处理Results对象 - 不保存它们，因为它们不需要用于恢复处理
+                                elif key == 'detect_results':
+                                    # 跳过Results对象，不保存到缓存中
+                                    continue
+                                # 其他基本类型可以直接保存
+                                elif isinstance(value, (str, int, float, bool, type(None))):
+                                    serializable_item[key] = value
+                                # 如果是列表或字典，尝试保存，但不保存其中的复杂对象
+                                elif isinstance(value, (list, dict)):
+                                    try:
+                                        # 测试是否可以序列化
+                                        json.dumps(value)
+                                        serializable_item[key] = value
+                                    except TypeError:
+                                        # 如果无法序列化，则跳过
+                                        continue
+                                else:
+                                    # 对于其他无法序列化的对象，转换为字符串
+                                    try:
+                                        serializable_item[key] = str(value)
+                                    except:
+                                        continue
+                            serializable_excel_data.append(serializable_item)
+
+                        cache_data = {
+                            'file_path': file_path,
+                            'save_path': save_path,
+                            'save_detect_image': save_detect_image,
+                            'output_excel': output_excel,
+                            'copy_img': copy_img,
+                            'use_fp16': use_fp16,
+                            'processed_files': processed_files,
+                            'total_files': total_files,
+                            'excel_data': serializable_excel_data,
+                            'timestamp': time.time()
+                        }
+
+                        with open(cache_file, 'w', encoding='utf-8') as f:
+                            json.dump(cache_data, f, ensure_ascii=False, indent=4)
+
+                        logger.info(f"处理进度已缓存: {processed_files}/{total_files}")
+                    except Exception as e:
+                        logger.error(f"保存处理缓存失败: {e}")
+
+            # 保存用于后续处理的Excel数据
+            self.excel_data = excel_data
+
             # 处理独立探测首只
             excel_data = DataProcessor.process_independent_detection(excel_data)
 
@@ -1236,6 +1518,16 @@ FP16加速 (半精度浮点数加速)
             # 输出Excel
             if excel_data and output_excel:
                 self._export_and_open_excel(excel_data, save_path)
+
+            # 删除缓存文件
+            try:
+                temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+                cache_file = os.path.join(temp_dir, "cache.json")
+                if os.path.exists(cache_file) and not stopped_manually:
+                    os.remove(cache_file)
+                    logger.info("处理完成，缓存文件已删除")
+            except Exception as e:
+                logger.error(f"删除缓存文件失败: {e}")
 
             # 完成处理
             if not stopped_manually:
@@ -1249,10 +1541,15 @@ FP16加速 (半精度浮点数加速)
 
         finally:
             # 恢复UI状态
-            self
+            self._set_processing_state(False)
 
     def toggle_detection_preview(self) -> None:
         """切换是否显示检测结果"""
+        # 如果正在批量处理，则强制显示检测结果
+        if self.is_processing:
+            self.show_detection_var.set(True)
+            return
+
         selection = self.file_listbox.curselection()
         if not selection:
             return
@@ -1486,3 +1783,9 @@ FP16加速 (半精度浮点数加速)
                 except Exception as e:
                     logger.error(f"打开Excel文件失败: {e}")
                     messagebox.showerror("错误", f"无法打开Excel文件: {e}")
+
+    def json_serial(obj):
+        """用于JSON序列化处理datetime对象的函数"""
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Type {type(obj)} not serializable")
