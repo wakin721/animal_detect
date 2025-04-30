@@ -1071,6 +1071,12 @@ FP16加速 (半精度浮点数加速)
         # 保存当前图像路径
         self.current_image_path = file_path
 
+        # 检查是否已有检测结果并重置检测结果变量
+        self.current_detection_results = None
+
+        # 复位显示检测结果开关状态
+        self.show_detection_var.set(False)
+
         # 更新预览图像
         self.update_image_preview(file_path)
 
@@ -1187,9 +1193,104 @@ FP16加速 (半精度浮点数加速)
     def toggle_processing_state(self) -> None:
         """切换处理状态：开始处理或停止处理"""
         if not self.is_processing:
-            self.start_processing()
+            # 检查是否存在缓存文件
+            self.check_for_cache_and_process()
         else:
             self.stop_processing()
+
+    def check_for_cache_and_process(self) -> None:
+        """检查是否存在缓存文件，并询问是否继续处理"""
+        # 获取temp目录路径
+        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+        cache_file = os.path.join(temp_dir, "cache.json")
+
+        # 检查是否存在缓存文件
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+
+                if 'processed_files' in cache_data and 'total_files' in cache_data:
+                    # 创建提示信息
+                    processed = cache_data.get('processed_files', 0)
+                    total = cache_data.get('total_files', 0)
+                    file_path = cache_data.get('file_path', '')
+
+                    # 显示询问对话框
+                    if messagebox.askyesno(
+                            "发现未完成任务",
+                            f"检测到上次有未完成的处理任务，是否从上次进度继续处理？\n\n"
+                            f"已处理：{processed} 张\n"
+                            f"总计：{total} 张\n"
+                            f"路径：{file_path}"
+                    ):
+                        # 从缓存恢复设置并开始处理
+                        self._load_cache_data_from_file(cache_data)
+                        self.start_processing(resume_from=processed)
+                        return
+            except Exception as e:
+                logger.error(f"读取缓存文件失败: {e}")
+
+        # 如果没有缓存或用户选择不继续，则正常开始处理
+        self.start_processing()
+
+    def _load_cache_data_from_file(self, cache_data: Dict[str, Any]) -> None:
+        """从缓存数据加载设置
+
+        Args:
+            cache_data: 缓存数据字典
+        """
+        try:
+            # 从缓存中恢复数据
+            file_path = cache_data.get('file_path', '')
+            save_path = cache_data.get('save_path', '')
+            save_detect_image = cache_data.get('save_detect_image', True)
+            output_excel = cache_data.get('output_excel', True)
+            copy_img = cache_data.get('copy_img', False)
+            use_fp16 = cache_data.get('use_fp16', False)
+
+            # 加载Excel数据
+            excel_data = cache_data.get('excel_data', [])
+
+            # 处理Excel数据中的日期时间字符串
+            for item in excel_data:
+                # 转换"拍摄日期对象"字段
+                if '拍摄日期对象' in item and isinstance(item['拍摄日期对象'], str):
+                    try:
+                        item['拍摄日期对象'] = datetime.fromisoformat(item['拍摄日期对象'])
+                    except ValueError:
+                        pass
+
+                # 转换任何其他日期时间字符串字段
+                for key, value in list(item.items()):
+                    if isinstance(value, str) and 'T' in value and value.count('-') >= 2:
+                        try:
+                            item[key] = datetime.fromisoformat(value)
+                        except ValueError:
+                            pass
+
+            # 更新类属性
+            self.excel_data = excel_data
+
+            # 更新UI
+            if file_path and os.path.exists(file_path):
+                self.file_path_entry.delete(0, tk.END)
+                self.file_path_entry.insert(0, file_path)
+                self.update_file_list(file_path)
+
+            if save_path:
+                self.save_path_entry.delete(0, tk.END)
+                self.save_path_entry.insert(0, save_path)
+
+            self.save_detect_image_var.set(save_detect_image)
+            self.output_excel_var.set(output_excel)
+            self.copy_img_var.set(copy_img)
+            self.use_fp16_var.set(use_fp16)
+
+            logger.info("从缓存加载设置和数据成功")
+
+        except Exception as e:
+            logger.error(f"从缓存加载设置失败: {e}")
 
     def start_processing(self, resume_from=0):
         """开始处理图像
@@ -1304,6 +1405,12 @@ FP16加速 (半精度浮点数加速)
             self.progress_frame.speed_label.config(text="")
             self.progress_frame.time_label.config(text="")
 
+            # 更新状态栏文本，表明处理已停止
+            if self.processing_stop_flag.is_set():
+                self.status_bar.status_label.config(text="处理已停止")
+            else:
+                self.status_bar.status_label.config(text="就绪")
+
             # 启用配置选项
             for widget in (self.file_path_entry, self.file_path_button,
                            self.save_path_entry, self.save_path_button):
@@ -1331,12 +1438,21 @@ FP16加速 (半精度浮点数加速)
             use_fp16: 是否使用FP16加速推理
             resume_from: 从第几张图片开始处理，用于继续上次未完成的处理
         """
-        start_time = time.time()
+        # 计算合适的开始时间，考虑已处理的图片
+        if resume_from > 0:
+            # 如果是继续处理，根据平均处理时间估算之前处理所花费的时间
+            # 假设每张图片的处理时间为0.5秒（可根据实际情况调整）
+            estimated_previous_time = resume_from * 0.5  # 估算之前处理所花的时间
+            start_time = time.time() - estimated_previous_time  # 调整开始时间点
+        else:
+            start_time = time.time()  # 新任务直接使用当前时间
+
         excel_data = [] if resume_from == 0 else getattr(self, 'excel_data', [])
         processed_files = resume_from
         stopped_manually = False
         earliest_date = None
         cache_interval = 10  # 每处理10张图片保存一次缓存
+        timeout_error_occurred = False  # 新增标志，用于跟踪是否出现超时错误
 
         try:
             # 获取高级设置参数
@@ -1372,6 +1488,9 @@ FP16加速 (半精度浮点数加速)
                             if earliest_date is None or item['拍摄日期对象'] < earliest_date:
                                 earliest_date = item['拍摄日期对象']
 
+                # 立即更新进度显示，显示已加载的进度
+                self._update_progress(processed_files, total_files, start_time)
+
             # 处理每张图片
             for filename in image_files:
                 if self.processing_stop_flag.is_set():
@@ -1400,16 +1519,26 @@ FP16加速 (半精度浮点数加速)
                     img_path = os.path.join(file_path, filename)
                     image_info, img = ImageMetadataExtractor.extract_metadata(img_path, filename)
 
-                    # 检测物种 - 使用高级设置参数
-                    species_info = self.image_processor.detect_species(
-                        img_path,
-                        use_fp16=use_fp16,
-                        iou=iou,
-                        conf=conf,
-                        augment=augment,
-                        agnostic_nms=agnostic_nms
-                    )
+                    # 检测物种 - 使用高级设置参数，添加超时参数
+                    try:
+                        species_info = self.image_processor.detect_species(
+                            img_path,
+                            use_fp16=use_fp16,
+                            iou=iou,
+                            conf=conf,
+                            augment=augment,
+                            agnostic_nms=agnostic_nms,
+                            timeout=5.0  # 设置2秒超时
+                        )
+                    except TimeoutError as e:
+                        # 记录超时错误
+                        logger.error(f"处理文件 {filename} 超时: {e}")
+                        self.master.after(0, lambda f=filename, error=str(e): messagebox.showerror(
+                            "超时错误", f"处理文件 {f} 时检测超时: {error}\n将中断整个处理任务。"))
+                        timeout_error_occurred = True
+                        break  # 中断批量处理循环
 
+                    # 如果是不会超时错误外的异常，处理照常进行
                     # 更新图像信息
                     image_info.update(species_info)
 
@@ -1508,6 +1637,11 @@ FP16加速 (半精度浮点数加速)
             # 保存用于后续处理的Excel数据
             self.excel_data = excel_data
 
+            # 如果发生了超时错误，显示中断信息
+            if timeout_error_occurred:
+                self.status_bar.status_label.config(text="处理因超时而中断！")
+                return
+
             # 处理独立探测首只
             excel_data = DataProcessor.process_independent_detection(excel_data)
 
@@ -1523,14 +1657,14 @@ FP16加速 (半精度浮点数加速)
             try:
                 temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
                 cache_file = os.path.join(temp_dir, "cache.json")
-                if os.path.exists(cache_file) and not stopped_manually:
+                if os.path.exists(cache_file) and not stopped_manually and not timeout_error_occurred:
                     os.remove(cache_file)
                     logger.info("处理完成，缓存文件已删除")
             except Exception as e:
                 logger.error(f"删除缓存文件失败: {e}")
 
             # 完成处理
-            if not stopped_manually:
+            if not stopped_manually and not timeout_error_occurred:
                 self.status_bar.status_label.config(text="处理完成！")
                 messagebox.showinfo("成功", "图像处理完成！")
 
@@ -1552,6 +1686,7 @@ FP16加速 (半精度浮点数加速)
 
         selection = self.file_listbox.curselection()
         if not selection:
+            self.show_detection_var.set(False)  # 如果没有选中图片，关闭开关
             return
 
         file_name = self.file_listbox.get(selection[0])
@@ -1565,12 +1700,11 @@ FP16加速 (半精度浮点数加速)
                 self.current_detection_results
             )
         else:
-            # 如果没有检测结果，显示原始图像
+            # 如果没有检测结果，显示原始图像并关闭开关
             self.update_image_preview(file_path, False)
-
             if self.show_detection_var.get():
                 messagebox.showinfo("提示", '当前图像尚未检测，请点击"检测当前图像"按钮。')
-                self.show_detection_var.set(False)
+                self.show_detection_var.set(False)  # 自动关闭开关
 
     def detect_current_image(self) -> None:
         """检测当前选中的图像"""
@@ -1600,14 +1734,15 @@ FP16加速 (半精度浮点数加速)
             filename: 图像文件名
         """
         try:
-            # 检测物种 - 使用高级设置参数
+            # 检测物种 - 使用高级设置参数，添加超时参数
             species_info = self.image_processor.detect_species(
                 img_path,
                 use_fp16=self.use_fp16_var.get(),
                 iou=self.iou_var.get(),
                 conf=self.conf_var.get(),
                 augment=self.use_augment_var.get(),
-                agnostic_nms=self.use_agnostic_nms_var.get()
+                agnostic_nms=self.use_agnostic_nms_var.get(),
+                timeout=5.0  # 设置2秒超时
             )
 
             # 保存检测结果以便在预览中使用
@@ -1623,6 +1758,9 @@ FP16加速 (半精度浮点数加速)
             # 更新信息文本
             self.master.after(0, lambda: self._update_detection_info(species_info))
 
+        except TimeoutError as e:
+            logger.error(f"检测图像超时: {e}")
+            self.master.after(0, lambda: messagebox.showerror("超时错误", f"检测图像超时: {e}"))
         except Exception as e:
             logger.error(f"检测图像失败: {e}")
             self.master.after(0, lambda: messagebox.showerror("错误", f"检测图像失败: {e}"))

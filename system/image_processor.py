@@ -39,7 +39,8 @@ class ImageProcessor:
 
     def detect_species(self, img_path: str, use_fp16: bool = True,
                        iou: float = 0.3, conf: float = 0.25,
-                       augment: bool = True, agnostic_nms: bool = True) -> Dict[str, Any]:
+                       augment: bool = True, agnostic_nms: bool = True,
+                       timeout: float = 5.0) -> Dict[str, Any]:
         """使用YOLO模型识别图片中的物种
 
         Args:
@@ -49,10 +50,14 @@ class ImageProcessor:
             conf: 置信度阈值
             augment: 是否使用数据增强
             agnostic_nms: 是否使用类别无关NMS
+            timeout: 检测超时时间（秒）
 
         Returns:
             包含物种信息的字典
         """
+        import concurrent.futures
+        import time
+
         species_names = ""
         species_counts = ""
         n = 0
@@ -67,41 +72,58 @@ class ImageProcessor:
                 '最低置信度': min_confidence
             }
 
-        try:
-            # 使用参数进行检测
-            results = self.model(
-                img_path,
-                augment=augment,
-                agnostic_nms=agnostic_nms,
-                imgsz=1024,
-                half=use_fp16,
-                iou=iou,
-                conf=conf
-            )
-            detect_results = results
+        # 定义执行检测的函数
+        def run_detection():
+            nonlocal species_names, species_counts, n, detect_results, min_confidence
+            try:
+                # 使用参数进行检测
+                results = self.model(
+                    img_path,
+                    augment=augment,
+                    agnostic_nms=agnostic_nms,
+                    imgsz=1024,
+                    half=use_fp16,
+                    iou=iou,
+                    conf=conf
+                )
+                detect_results = results
 
-            for r in results:
-                data_list = r.boxes.cls.tolist()
-                counts = Counter(data_list)
-                species_dict = r.names
-                confidences = r.boxes.conf.tolist()
+                for r in results:
+                    data_list = r.boxes.cls.tolist()
+                    counts = Counter(data_list)
+                    species_dict = r.names
+                    confidences = r.boxes.conf.tolist()
 
-                if confidences:
-                    current_min_confidence = min(confidences)
-                    if min_confidence is None or current_min_confidence < min_confidence:
-                        min_confidence = "%.3f" % current_min_confidence
+                    if confidences:
+                        current_min_confidence = min(confidences)
+                        if min_confidence is None or current_min_confidence < min_confidence:
+                            min_confidence = "%.3f" % current_min_confidence
 
-                for element, count in counts.items():
-                    n += 1
-                    species_name = species_dict[int(element)]
-                    if n == 1:
-                        species_names += species_name
-                        species_counts += str(count)
-                    else:
-                        species_names += f",{species_name}"
-                        species_counts += f",{count}"
-        except Exception as e:
-            logger.error(f"物种检测失败: {e}")
+                    for element, count in counts.items():
+                        n += 1
+                        species_name = species_dict[int(element)]
+                        if n == 1:
+                            species_names += species_name
+                            species_counts += str(count)
+                        else:
+                            species_names += f",{species_name}"
+                            species_counts += f",{count}"
+                return True
+            except Exception as e:
+                logger.error(f"物种检测失败: {e}")
+                return False
+
+        # 使用线程池执行带有超时的检测
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(run_detection)
+            try:
+                # 等待执行完成，有超时限制
+                success = future.result(timeout=timeout)
+                if not success:
+                    raise Exception("检测过程出错")
+            except concurrent.futures.TimeoutError:
+                # 超时处理
+                raise TimeoutError(f"物种检测超时（>{timeout}秒）")
 
         return {
             '物种名称': species_names,
