@@ -9,7 +9,7 @@ import json
 import logging
 import subprocess
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import ttk, messagebox 
 
 # 自动安装依赖
 def install_requirements():
