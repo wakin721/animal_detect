@@ -45,6 +45,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 检测CUDA是否可用
+def check_cuda_available():
+    try:
+        import torch
+        cuda_available = torch.cuda.is_available()
+        return cuda_available
+    except ImportError:
+        logger.error("无法导入PyTorch，CUDA检测失败")
+        return False
+    except Exception as e:
+        logger.error(f"检测CUDA时出错: {e}")
+        return False
+
 # 确保system文件夹在路径中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'system'))
 
@@ -54,6 +67,26 @@ import tkinter as tk
 
 def main():
     """程序入口点"""
+    # 检查CUDA可用性
+    def check_cuda_available():
+        try:
+            import torch
+            cuda_available = torch.cuda.is_available()
+            logger.info(f"CUDA可用性检测结果: {cuda_available}")
+            return cuda_available
+        except ImportError:
+            logger.error("无法导入PyTorch，CUDA检测失败")
+            return False
+        except Exception as e:
+            logger.error(f"检测CUDA时出错: {e}")
+            return False
+
+    # 确保在程序启动时检测CUDA
+    cuda_available = check_cuda_available()
+
+    # 添加至环境变量，让其他模块可以访问
+    os.environ["CUDA_AVAILABLE"] = str(cuda_available).lower()
+
     # 检查是否存在未完成的处理任务
     base_dir = os.path.dirname(os.path.abspath(__file__))
     temp_dir = os.path.join(base_dir, "temp")
@@ -117,10 +150,23 @@ def main():
         try:
             with open(settings_file, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
+
+            # 如果CUDA不可用，禁用fp16设置
+            if not cuda_available and settings and "use_fp16" in settings:
+                settings["use_fp16"] = False
+
         except Exception as e:
             logger.error(f"加载设置文件失败: {e}")
 
-    # 创建主窗口和应用实例
+    # 如果CUDA不可用，显示警告消息
+    if not cuda_available:
+        # 创建一个临时窗口来显示弹窗
+        temp_root = tk.Tk()
+        temp_root.withdraw()  # 隐藏窗口
+        messagebox.showwarning("CUDA检测", "未检测到CUDA/Rocm，请检查是否正确安装对应PyTorch版本。")
+        temp_root.destroy()  # 销毁临时窗口
+
+    # 创建主窗口
     root = tk.Tk()
     root.resizable(False, False)
 
@@ -129,8 +175,41 @@ def main():
     # 创建实际的SettingsManager对象
     settings_manager = SettingsManager(base_dir)
 
-    # 创建GUI实例，传入真正的settings_manager对象
+    # 创建GUI实例
     app = ObjectDetectionGUI(root, settings_manager=settings_manager, settings=settings)
+
+    # 设置CUDA可用性属性
+    app.cuda_available = cuda_available
+
+    # 如果CUDA不可用，禁用FP16选项并设置为False
+    if not cuda_available:
+        app.use_fp16_var.set(False)
+
+        # 找到fp16开关并禁用它 - 在创建完所有UI组件后
+        def disable_fp16_switch():
+            try:
+                # 检查高级设置面板中的FP16开关
+                for widget in app.advanced_frame.winfo_children():
+                    if isinstance(widget, tk.Frame) or isinstance(widget, ttk.Frame):
+                        # 查找标签框架
+                        for child in widget.winfo_children():
+                            if hasattr(child, 'winfo_children'):
+                                for grandchild in child.winfo_children():
+                                    # 寻找FP16开关
+                                    if hasattr(grandchild, 'cget') and hasattr(grandchild, 'configure'):
+                                        try:
+                                            if grandchild.cget("text") == "使用FP16加速推理":
+                                                grandchild.configure(state="disabled")
+                                                logger.info("已禁用FP16开关")
+                                                return
+                                        except:
+                                            pass
+                logger.info("未找到FP16开关，可能UI结构有所不同")
+            except Exception as e:
+                logger.error(f"禁用FP16开关失败: {e}")
+
+        # 延迟执行禁用操作，确保UI已完全创建
+        root.after(500, disable_fp16_switch)
 
     # 如果需要继续处理，设置excel_data并启动处理
     if resume_processing and resume_from > 0:
@@ -178,8 +257,12 @@ def main():
             if 'copy_img' in cache_data:
                 app.copy_img_var.set(cache_data['copy_img'])
 
+            # 如果CUDA不可用，强制禁用FP16
             if 'use_fp16' in cache_data:
-                app.use_fp16_var.set(cache_data['use_fp16'])
+                if cuda_available:
+                    app.use_fp16_var.set(cache_data['use_fp16'])
+                else:
+                    app.use_fp16_var.set(False)
 
         # 延迟启动处理，确保UI已完全加载
         root.after(1000, lambda: app.start_processing(resume_from=resume_from))

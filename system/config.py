@@ -4,7 +4,7 @@
 
 # 应用信息常量
 APP_TITLE = "物种信息检测 v1.6"
-APP_VERSION = "1.6.6"
+APP_VERSION = "1.6.7"
 DEFAULT_EXCEL_FILENAME = "物种检测信息.xlsx"
 
 # 文件支持相关常量

@@ -37,26 +37,30 @@ class ImageProcessor:
             logger.error(f"加载模型失败: {e}")
             return None
 
-    def detect_species(self, img_path: str, use_fp16: bool = True,
-                       iou: float = 0.3, conf: float = 0.25,
-                       augment: bool = True, agnostic_nms: bool = True,
-                       timeout: float = 5.0) -> Dict[str, Any]:
-        """使用YOLO模型识别图片中的物种
+    def _process_images_thread(self, file_path: str, save_path: str,
+                               save_detect_image: bool, output_excel: bool,
+                               copy_img: bool, use_fp16: bool, resume_from: int = 0) -> None:
+        """图像处理线程
 
         Args:
-            img_path: 图片文件路径
+            file_path: 源文件路径
+            save_path: 保存路径
+            save_detect_image: 是否保存探测图片
+            output_excel: 是否输出Excel表格
+            copy_img: 是否按物种分类复制图片
             use_fp16: 是否使用FP16加速推理
-            iou: IOU阈值
-            conf: 置信度阈值
-            augment: 是否使用数据增强
-            agnostic_nms: 是否使用类别无关NMS
-            timeout: 检测超时时间（秒）
-
-        Returns:
-            包含物种信息的字典
+            resume_from: 从第几张图片开始处理，用于继续上次未完成的处理
         """
-        import concurrent.futures
-        import time
+        # 强制检查CUDA是否可用，并在不可用时禁用FP16
+        try:
+            import torch
+            cuda_available = torch.cuda.is_available()
+            if not cuda_available:
+                use_fp16 = False  # 如果CUDA不可用，强制禁用FP16
+        except ImportError:
+            use_fp16 = False  # 如果无法导入torch，强制禁用FP16
+        except Exception:
+            use_fp16 = False  # 任何其他异常也禁用FP16
 
         species_names = ""
         species_counts = ""
@@ -82,7 +86,7 @@ class ImageProcessor:
                     augment=augment,
                     agnostic_nms=agnostic_nms,
                     imgsz=1024,
-                    half=use_fp16,
+                    half=use_fp16,  # 这里使用可能已被调整的use_fp16值
                     iou=iou,
                     conf=conf
                 )

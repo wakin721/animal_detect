@@ -48,6 +48,9 @@ class ObjectDetectionGUI:
         self.master = master
         master.title(APP_TITLE)
 
+        # 初始化CUDA可用性状态为False，后面会在main.py中设置
+        self.cuda_available = False
+
         # 保存设置管理器
         self.settings_manager = settings_manager
 
@@ -354,6 +357,11 @@ class ObjectDetectionGUI:
             switches_frame, text="使用FP16加速推理", variable=self.use_fp16_var,
             style="Switch.TCheckbutton")
         fp16_switch.pack(anchor="w", padx=10, pady=(10, 5))
+
+        # 如果CUDA不可用，禁用FP16开关
+        if not self.cuda_available:
+            fp16_switch["state"] = "disabled"
+            self.use_fp16_var.set(False)
 
         fp16_desc = ttk.Label(
             switches_frame,
@@ -1520,23 +1528,15 @@ FP16加速 (半精度浮点数加速)
                     image_info, img = ImageMetadataExtractor.extract_metadata(img_path, filename)
 
                     # 检测物种 - 使用高级设置参数，添加超时参数
-                    try:
-                        species_info = self.image_processor.detect_species(
-                            img_path,
-                            use_fp16=use_fp16,
-                            iou=iou,
-                            conf=conf,
-                            augment=augment,
-                            agnostic_nms=agnostic_nms,
-                            timeout=5.0  # 设置2秒超时
-                        )
-                    except TimeoutError as e:
-                        # 记录超时错误
-                        logger.error(f"处理文件 {filename} 超时: {e}")
-                        self.master.after(0, lambda f=filename, error=str(e): messagebox.showerror(
-                            "超时错误", f"处理文件 {f} 时检测超时: {error}\n将中断整个处理任务。"))
-                        timeout_error_occurred = True
-                        break  # 中断批量处理循环
+                    species_info = self.image_processor.detect_species(
+                        img_path,
+                        use_fp16=self.use_fp16_var.get() and self.cuda_available,  # 只有CUDA可用时才使用FP16
+                        iou=self.iou_var.get(),
+                        conf=self.conf_var.get(),
+                        augment=self.use_augment_var.get(),
+                        agnostic_nms=self.use_agnostic_nms_var.get(),
+                        timeout=5.0  # 设置超时
+                    )
 
                     # 如果是不会超时错误外的异常，处理照常进行
                     # 更新图像信息
@@ -1735,14 +1735,15 @@ FP16加速 (半精度浮点数加速)
         """
         try:
             # 检测物种 - 使用高级设置参数，添加超时参数
+            # 检测物种 - 使用高级设置参数，添加超时参数
             species_info = self.image_processor.detect_species(
                 img_path,
-                use_fp16=self.use_fp16_var.get(),
+                use_fp16=self.use_fp16_var.get() and self.cuda_available,  # 只有CUDA可用时才使用FP16
                 iou=self.iou_var.get(),
                 conf=self.conf_var.get(),
                 augment=self.use_augment_var.get(),
                 agnostic_nms=self.use_agnostic_nms_var.get(),
-                timeout=5.0  # 设置2秒超时
+                timeout=5.0  # 设置超时
             )
 
             # 保存检测结果以便在预览中使用
