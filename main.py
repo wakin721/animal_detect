@@ -9,7 +9,7 @@ import json
 import logging
 import subprocess
 import tkinter as tk
-from tkinter import ttk, messagebox 
+from tkinter import ttk, messagebox
 
 # 自动安装依赖
 def install_requirements():
@@ -45,19 +45,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 检测CUDA是否可用
-def check_cuda_available():
-    try:
-        import torch
-        cuda_available = torch.cuda.is_available()
-        return cuda_available
-    except ImportError:
-        logger.error("无法导入PyTorch，CUDA检测失败")
-        return False
-    except Exception as e:
-        logger.error(f"检测CUDA时出错: {e}")
-        return False
-
 # 确保system文件夹在路径中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'system'))
 
@@ -84,8 +71,13 @@ def main():
     # 确保在程序启动时检测CUDA
     cuda_available = check_cuda_available()
 
-    # 添加至环境变量，让其他模块可以访问
-    os.environ["CUDA_AVAILABLE"] = str(cuda_available).lower()
+    # 如果CUDA不可用，显示警告消息
+    if not cuda_available:
+        # 创建一个临时窗口来显示弹窗
+        temp_root = tk.Tk()
+        temp_root.withdraw()  # 隐藏窗口
+        messagebox.showwarning("CUDA检测", "未检测到CUDA/Rocm，请检查是否正确安装对应PyTorch版本。")
+        temp_root.destroy()  # 销毁临时窗口
 
     # 检查是否存在未完成的处理任务
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -143,6 +135,14 @@ def main():
         except Exception as e:
             logger.error(f"创建设置目录失败: {e}")
 
+    # 创建临时图片目录用于保存检测结果
+    temp_photo_dir = os.path.join(temp_dir, "photo")
+    if not os.path.exists(temp_photo_dir):
+        try:
+            os.makedirs(temp_photo_dir)
+        except Exception as e:
+            logger.error(f"创建临时图片目录失败: {e}")
+
     # 加载设置
     settings_file = os.path.join(settings_dir, "settings.json")
     settings = None
@@ -157,14 +157,6 @@ def main():
 
         except Exception as e:
             logger.error(f"加载设置文件失败: {e}")
-
-    # 如果CUDA不可用，显示警告消息
-    if not cuda_available:
-        # 创建一个临时窗口来显示弹窗
-        temp_root = tk.Tk()
-        temp_root.withdraw()  # 隐藏窗口
-        messagebox.showwarning("CUDA检测", "未检测到CUDA/Rocm，请检查是否正确安装对应PyTorch版本。")
-        temp_root.destroy()  # 销毁临时窗口
 
     # 创建主窗口
     root = tk.Tk()

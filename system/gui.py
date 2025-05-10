@@ -14,6 +14,7 @@ from shutil import copy
 import json
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+from collections import Counter
 
 import sv_ttk  # Sun Valley ttk theme for Windows 11 style
 
@@ -48,8 +49,9 @@ class ObjectDetectionGUI:
         self.master = master
         master.title(APP_TITLE)
 
-        # 初始化CUDA可用性状态为False，后面会在main.py中设置
-        self.cuda_available = False
+        import torch
+        # 检查CUDA可用性
+        self.cuda_available = torch.cuda.is_available()
 
         # 保存设置管理器
         self.settings_manager = settings_manager
@@ -1014,6 +1016,18 @@ FP16加速 (半精度浮点数加速)
             # 停止处理但不删除缓存
             self.processing_stop_flag.set()
 
+        # 释放图像资源
+        if hasattr(self, 'preview_image'):
+            self.preview_image = None
+        if hasattr(self, 'original_image'):
+            self.original_image = None
+        if hasattr(self, 'current_detection_results'):
+            self.current_detection_results = None
+
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+
         # 保存当前设置，添加防错处理
         try:
             if hasattr(self, '_save_current_settings'):
@@ -1027,6 +1041,11 @@ FP16加速 (半精度浮点数加速)
         """浏览文件路径"""
         folder_selected = filedialog.askdirectory(title="选择图像文件所在文件夹")
         if folder_selected:
+            # 如果选择了新的文件夹，则清空临时图像目录
+            current_path = self.file_path_entry.get()
+            if current_path != folder_selected:
+                self._clean_temp_photo_directory()
+
             self.file_path_entry.delete(0, tk.END)
             self.file_path_entry.insert(0, folder_selected)
             self.update_file_list(folder_selected)
@@ -1049,6 +1068,10 @@ FP16加速 (半精度浮点数加速)
             return
 
         self.file_listbox.delete(0, tk.END)
+
+        # 重置检测相关变量（但不复位显示检测结果开关，让它根据选择的图片自动决定）
+        self.current_detection_results = None
+        self.current_image_path = None
 
         try:
             image_files = [
@@ -1074,36 +1097,91 @@ FP16加速 (半精度浮点数加速)
         if not selection:
             return
 
+        # 清除之前的图像引用
+        if hasattr(self, 'preview_image'):
+            self.preview_image = None
+        if hasattr(self, 'original_image'):
+            self.original_image = None
+
         file_name = self.file_listbox.get(selection[0])
         file_path = os.path.join(self.file_path_entry.get(), file_name)
 
         # 保存当前图像路径
         self.current_image_path = file_path
 
-        # 检查是否已有检测结果并重置检测结果变量
+        # 重置检测结果变量
         self.current_detection_results = None
 
-        # 复位显示检测结果开关状态
-        self.show_detection_var.set(False)
+        # 检查是否已有检测结果（在temp/photo目录中）
+        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+        photo_path = os.path.join(temp_dir, "photo")
+        temp_result_path = os.path.join(photo_path, file_name)
 
-        # 更新预览图像
-        self.update_image_preview(file_path)
+        # 检查是否有对应的 JSON 文件（用于确认是否已检测）
+        base_name, _ = os.path.splitext(file_name)
+        json_path = os.path.join(photo_path, f"{base_name}.json")
 
-        # 更新图像信息
-        self.update_image_info(file_path, file_name)
+        # 如果已经检测过（存在检测结果图像和JSON），自动显示检测结果
+        if os.path.exists(temp_result_path) and os.path.exists(json_path):
+            # 打开显示检测结果开关
+            self.show_detection_var.set(True)
 
-    def update_image_preview(self, file_path: str, show_detection: bool = False, detection_results=None) -> None:
+            # 显示检测结果图像
+            self.update_image_preview(temp_result_path, is_temp_result=True)
+
+            # 显示检测信息
+            try:
+                import json
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    detection_info = json.load(f)
+
+                # 构建检测信息并更新显示
+                species_info = {
+                    '物种名称': detection_info.get('物种名称', ''),
+                    '物种数量': detection_info.get('物种数量', ''),
+                    '最低置信度': detection_info.get('最低置信度', ''),
+                    '检测时间': detection_info.get('检测时间', '')
+                }
+
+                # 更新图像信息和检测信息
+                self.update_image_info(file_path, file_name)
+                self._update_detection_info_from_json(species_info)
+            except Exception as e:
+                logger.error(f"读取检测信息JSON失败: {e}")
+                # 如果读取JSON失败，仍然更新图像信息但不显示检测信息
+                self.update_image_info(file_path, file_name)
+        else:
+            # 没有检测结果，关闭显示检测结果开关
+            self.show_detection_var.set(False)
+
+            # 更新预览图像（显示原图）
+            self.update_image_preview(file_path)
+
+            # 更新图像信息
+            self.update_image_info(file_path, file_name)
+
+    def update_image_preview(self, file_path: str, show_detection: bool = False, detection_results=None,
+                             is_temp_result: bool = False) -> None:
         """更新图像预览
 
         Args:
             file_path: 图像文件路径
             show_detection: 是否显示检测结果
             detection_results: YOLO检测结果对象
+            is_temp_result: 是否为临时结果图像
         """
         try:
-            if show_detection and detection_results is not None:
+            # 先清除可能的旧引用
+            if hasattr(self, 'preview_image'):
+                self.preview_image = None
+            if hasattr(self, 'image_label') and hasattr(self.image_label, 'image'):
+                self.image_label.image = None
+
+            if is_temp_result:
+                # 直接加载临时结果图像
+                img = Image.open(file_path)
+            elif show_detection and detection_results is not None:
                 # 获取YOLO绘制的检测结果图像
-                # 这里使用YOLO自带的绘制功能获取处理后的图像
                 for result in detection_results:
                     # 使用plots功能获取绘制了检测框的图像
                     result_img = result.plot()
@@ -1130,6 +1208,7 @@ FP16加速 (半精度浮点数加速)
             img = img.resize((new_width, new_height), Image.LANCZOS)
             photo = ImageTk.PhotoImage(img)
 
+            # 更新图像标签
             self.image_label.config(image=photo)
             self.image_label.image = photo  # 保持引用
 
@@ -1139,6 +1218,7 @@ FP16加速 (半精度浮点数加速)
             logger.error(f"更新图像预览失败: {e}")
             self.image_label.config(image='', text="无法加载图像")
             self.original_image = None
+            self.preview_image = None
 
     def update_image_info(self, file_path: str, file_name: str) -> None:
         """更新图像信息"""
@@ -1182,6 +1262,11 @@ FP16加速 (半精度浮点数加速)
         """处理文件路径输入框的回车键事件"""
         file_path = self.file_path_entry.get()
         if os.path.isdir(file_path):
+            # 如果是新的文件夹路径，则清空临时图像目录
+            current_selection = self.file_listbox.get(0, tk.END)
+            if not current_selection or os.path.dirname(os.path.join(file_path, current_selection[0])) != file_path.replace("\\","/"):
+                self._clean_temp_photo_directory()
+
             self.update_file_list(file_path)
             self.status_bar.status_label.config(text=f"已设置文件路径: {file_path}")
         else:
@@ -1536,7 +1621,7 @@ FP16加速 (半精度浮点数加速)
                         conf=self.conf_var.get(),
                         augment=self.use_augment_var.get(),
                         agnostic_nms=self.use_agnostic_nms_var.get(),
-                        timeout=5.0  # 设置超时
+                        timeout=10.0  # 设置超时
                     )
 
                     # 如果是不会超时错误外的异常，处理照常进行
@@ -1548,6 +1633,19 @@ FP16加速 (半精度浮点数加速)
                     self.current_detection_results = detect_results  # 保存当前检测结果
                     self.master.after(0, lambda p=img_path, d=detect_results:
                     self.update_image_preview(p, True, d))
+
+                    # 保存临时检测结果图片
+                    if self.current_detection_results:
+                        self.image_processor.save_detection_temp(detect_results, filename)
+                        # 添加检测时间
+                        from datetime import datetime
+                        species_info['检测时间'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        # 保存检测结果JSON
+                        self.image_processor.save_detection_info_json(detect_results, filename, species_info)
+
+                    # 保存检测结果到临时目录
+                    if detect_results:
+                        self.image_processor.save_detection_temp(detect_results, filename)
 
                     # 更新最早日期
                     if image_info.get('拍摄日期对象'):
@@ -1693,19 +1791,49 @@ FP16加速 (半精度浮点数加速)
         file_name = self.file_listbox.get(selection[0])
         file_path = os.path.join(self.file_path_entry.get(), file_name)
 
-        # 获取当前选中文件的检测结果
-        if hasattr(self, 'current_detection_results') and self.current_detection_results is not None:
-            self.update_image_preview(
-                file_path,
-                self.show_detection_var.get(),
-                self.current_detection_results
-            )
-        else:
-            # 如果没有检测结果，显示原始图像并关闭开关
-            self.update_image_preview(file_path, False)
-            if self.show_detection_var.get():
+        # 检查是否有检测结果
+        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+        photo_path = os.path.join(temp_dir, "photo")
+        temp_result_path = os.path.join(photo_path, file_name)
+
+        # 检查是否有对应的 JSON 文件
+        base_name, _ = os.path.splitext(file_name)
+        json_path = os.path.join(photo_path, f"{base_name}.json")
+
+        # 如果显示结果开关打开
+        if self.show_detection_var.get():
+            if os.path.exists(temp_result_path):
+                # 存在检测结果图像，显示它
+                self.update_image_preview(temp_result_path, is_temp_result=True)
+
+                # 如果存在JSON文件，读取并显示检测信息
+                if os.path.exists(json_path):
+                    try:
+                        import json
+                        with open(json_path, 'r', encoding='utf-8') as f:
+                            detection_info = json.load(f)
+
+                        # 构建检测信息并更新显示
+                        species_info = {
+                            '物种名称': detection_info.get('物种名称', ''),
+                            '物种数量': detection_info.get('物种数量', ''),
+                            '最低置信度': detection_info.get('最低置信度', ''),
+                            '检测时间': detection_info.get('检测时间', '')
+                        }
+                        self._update_detection_info_from_json(species_info)
+                    except Exception as e:
+                        logger.error(f"读取检测信息JSON失败: {e}")
+            elif hasattr(self, 'current_detection_results') and self.current_detection_results is not None:
+                # 有当前检测结果但没有临时保存的图像，使用当前结果
+                self.update_image_preview(file_path, True, self.current_detection_results)
+            else:
+                # 没有检测结果，显示原始图像并提示用户
+                self.update_image_preview(file_path, False)
                 messagebox.showinfo("提示", '当前图像尚未检测，请点击"检测当前图像"按钮。')
                 self.show_detection_var.set(False)  # 自动关闭开关
+        else:
+            # 显示原始图像
+            self.update_image_preview(file_path, False)
 
     def detect_current_image(self) -> None:
         """检测当前选中的图像"""
@@ -1735,20 +1863,80 @@ FP16加速 (半精度浮点数加速)
             filename: 图像文件名
         """
         try:
-            # 检测物种 - 使用高级设置参数，添加超时参数
-            # 检测物种 - 使用高级设置参数，添加超时参数
-            species_info = self.image_processor.detect_species(
+            # 导入需要的依赖
+            from collections import Counter
+            from datetime import datetime
+
+            # 使用现有代码模式进行检测
+            if not self.image_processor.model:
+                raise Exception("模型未加载")
+
+            # 设置模型参数
+            use_fp16 = self.use_fp16_var.get() and self.cuda_available
+            iou = self.iou_var.get()
+            conf = self.conf_var.get()
+            augment = self.use_augment_var.get()
+            agnostic_nms = self.use_agnostic_nms_var.get()
+
+            # 进行检测
+            results = self.image_processor.model(
                 img_path,
-                use_fp16=self.use_fp16_var.get() and self.cuda_available,  # 只有CUDA可用时才使用FP16
-                iou=self.iou_var.get(),
-                conf=self.conf_var.get(),
-                augment=self.use_augment_var.get(),
-                agnostic_nms=self.use_agnostic_nms_var.get(),
-                timeout=5.0  # 设置超时
+                augment=augment,
+                agnostic_nms=agnostic_nms,
+                imgsz=1024,
+                half=use_fp16,
+                iou=iou,
+                conf=conf
             )
 
+            # 处理检测结果
+            species_names = ""
+            species_counts = ""
+            n = 0
+            min_confidence = None
+
+            for r in results:
+                data_list = r.boxes.cls.tolist()
+                counts = Counter(data_list)
+                species_dict = r.names
+                confidences = r.boxes.conf.tolist()
+
+                if confidences:
+                    current_min_confidence = min(confidences)
+                    if min_confidence is None or current_min_confidence < min_confidence:
+                        min_confidence = "%.3f" % current_min_confidence
+
+                for element, count in counts.items():
+                    n += 1
+                    species_name = species_dict[int(element)]
+                    if n == 1:
+                        species_names += species_name
+                        species_counts += str(count)
+                    else:
+                        species_names += f",{species_name}"
+                        species_counts += f",{count}"
+
+            # 添加检测时间
+            detection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # 构建结果字典
+            species_info = {
+                '物种名称': species_names,
+                '物种数量': species_counts,
+                'detect_results': results,
+                '最低置信度': min_confidence,
+                '检测时间': detection_time
+            }
+
             # 保存检测结果以便在预览中使用
-            self.current_detection_results = species_info['detect_results']
+            self.current_detection_results = results
+
+            # 保存检测结果到临时目录中
+            if self.current_detection_results:
+                # 保存图像
+                self.image_processor.save_detection_temp(self.current_detection_results, filename)
+                # 保存JSON
+                self.image_processor.save_detection_info_json(self.current_detection_results, filename, species_info)
 
             # 切换到显示检测结果
             self.master.after(0, lambda: self.show_detection_var.set(True))
@@ -1760,12 +1948,10 @@ FP16加速 (半精度浮点数加速)
             # 更新信息文本
             self.master.after(0, lambda: self._update_detection_info(species_info))
 
-        except TimeoutError as e:
-            logger.error(f"检测图像超时: {e}")
-            self.master.after(0, lambda: messagebox.showerror("超时错误", f"检测图像超时: {e}"))
-        except Exception as e:
-            logger.error(f"检测图像失败: {e}")
-            self.master.after(0, lambda: messagebox.showerror("错误", f"检测图像失败: {e}"))
+        except Exception as err:
+            error_msg = str(err)
+            logger.error(f"检测图像失败: {error_msg}")
+            self.master.after(0, lambda msg=error_msg: messagebox.showerror("错误", f"检测图像失败: {msg}"))
         finally:
             # 恢复按钮状态
             self.master.after(0, lambda: self.detect_button.config(state="normal"))
@@ -1929,3 +2115,152 @@ FP16加速 (半精度浮点数加速)
         if isinstance(obj, datetime):
             return obj.isoformat()
         raise TypeError(f"Type {type(obj)} not serializable")
+
+    def _update_detection_info_from_json(self, species_info: Dict) -> None:
+        """从JSON更新检测信息文本
+
+        Args:
+            species_info: 物种检测信息
+        """
+        self.info_text.config(state="normal")
+
+        # 获取当前文本（保留文件基本信息）
+        current_text = self.info_text.get(1.0, "2.end")  # 只保留前两行基本信息
+
+        # 在文本末尾添加检测信息
+        detection_parts = ["检测结果:"]
+        if species_info['物种名称']:
+            species_names = species_info['物种名称'].split(',')
+            species_counts = species_info['物种数量'].split(',')
+
+            species_info_parts = []
+            for i, (name, count) in enumerate(zip(species_names, species_counts)):
+                species_info_parts.append(f"{name}: {count}只")
+            detection_parts.append(", ".join(species_info_parts))
+
+            if species_info['最低置信度']:
+                detection_parts.append(f"最低置信度: {species_info['最低置信度']}")
+
+            if species_info['检测时间']:
+                detection_parts.append(f"检测时间: {species_info['检测时间']}")
+        else:
+            detection_parts.append("未检测到已知物种")
+
+        # 创建新的文本内容
+        detection_info = " | ".join(detection_parts)
+        new_text = current_text + "\n" + detection_info
+
+        # 设置新的文本内容
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.insert(tk.END, new_text)
+        self.info_text.config(state="disabled")
+
+    def _clean_temp_photo_directory(self) -> None:
+        """清空临时图像文件目录"""
+        try:
+            import os
+            import shutil
+            import gc
+
+            # 先释放所有可能的图像引用
+            self.image_label.config(image='')  # 清除图像标签显示
+            if hasattr(self, 'preview_image'):
+                self.preview_image = None
+            if hasattr(self, 'original_image'):
+                self.original_image = None
+            if hasattr(self, 'current_detection_results'):
+                self.current_detection_results = None
+
+            # 强制垃圾回收以确保释放所有图像引用
+            gc.collect()
+
+            # 获取临时图像目录路径
+            temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+            photo_path = os.path.join(temp_dir, "photo")
+            print(photo_path)
+
+            # 如果目录存在，清空其中的所有文件
+            if os.path.exists(photo_path):
+                # 记录清理操作
+                logger.info(f"正在清空临时图像目录: {photo_path}")
+
+                # 尝试多次删除，有时文件可能会被延迟释放
+                attempts = 3
+                for attempt in range(attempts):
+                    failed_files = []
+
+                    for file in os.listdir(photo_path):
+                        file_path = os.path.join(photo_path, file)
+                        try:
+                            if os.path.isfile(file_path):
+                                # 使用try-except捕获权限和锁定文件的错误
+                                try:
+                                    os.unlink(file_path)
+                                except PermissionError:
+                                    # 可能是Windows文件锁定，使用标记删除文件的方法
+                                    try:
+                                        import stat
+                                        # 修改文件权限
+                                        os.chmod(file_path, stat.S_IWRITE)
+                                        os.unlink(file_path)
+                                    except:
+                                        failed_files.append(file_path)
+                            elif os.path.isdir(file_path):
+                                shutil.rmtree(file_path, ignore_errors=True)
+                        except Exception as e:
+                            logger.error(f"清除临时文件失败 {file_path}: {e}")
+                            failed_files.append(file_path)
+
+                    # 如果所有文件都已成功删除，跳出重试循环
+                    if not failed_files:
+                        break
+
+                    # 如果不是最后一次尝试，等待一段时间再重试
+                    if attempt < attempts - 1 and failed_files:
+                        import time
+                        time.sleep(0.5)  # 等待500毫秒
+                        gc.collect()  # 再次强制垃圾回收
+
+                        # 记录哪些文件无法删除
+                        if failed_files:
+                            logger.warning(f"第 {attempt + 1} 次尝试后，仍有 {len(failed_files)} 个文件无法删除")
+
+                # 如果仍有无法删除的文件，记录它们
+                if failed_files:
+                    logger.error(f"无法删除以下文件: {failed_files}")
+                    # 可以考虑给用户显示警告信息
+                    self.master.after(0, lambda: messagebox.showwarning("警告",
+                                                                        f"有 {len(failed_files)} 个临时文件无法删除。这些文件可能正在被系统占用。"))
+                else:
+                    logger.info("临时图像目录清空完成")
+            else:
+                # 目录不存在，创建它
+                os.makedirs(photo_path, exist_ok=True)
+                logger.info(f"创建临时图像目录: {photo_path}")
+
+        except Exception as e:
+            logger.error(f"清空临时图像目录失败: {e}")
+            self.master.after(0, lambda err=str(e): messagebox.showerror("错误", f"清空临时图像目录失败: {err}"))
+
+    def _has_detection_result(self, file_name: str) -> bool:
+        """检查图像是否有检测结果
+
+        Args:
+            file_name: 图像文件名
+
+        Returns:
+            bool: 是否存在检测结果
+        """
+        try:
+            temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+            photo_path = os.path.join(temp_dir, "photo")
+            temp_result_path = os.path.join(photo_path, file_name)
+
+            # 检查是否有对应的 JSON 文件
+            base_name, _ = os.path.splitext(file_name)
+            json_path = os.path.join(photo_path, f"{base_name}.json")
+
+            return os.path.exists(temp_result_path) and os.path.exists(json_path)
+        except Exception as e:
+            logger.error(f"检查检测结果失败: {e}")
+            return False

@@ -176,3 +176,93 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"获取物种名称失败: {e}")
         return "unknown"
+
+    def save_detection_temp(self, results: Any, image_name: str) -> str:
+        """保存探测结果图片到临时目录
+
+        Args:
+            results: YOLO检测结果
+            image_name: 原始图片名称
+
+        Returns:
+            保存的文件路径或空字符串（如果保存失败）
+        """
+        if not results:
+            return ""
+
+        try:
+            # 创建临时保存目录
+            temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+            photo_path = os.path.join(temp_dir, "photo")
+            os.makedirs(photo_path, exist_ok=True)
+
+            # 保存结果图像
+            result_file = os.path.join(photo_path, image_name)
+            for c, h in enumerate(results):
+                h.save(filename=result_file)
+                return result_file  # 返回保存的文件路径
+        except Exception as e:
+            logger.error(f"保存临时检测结果图片失败: {e}")
+            return ""
+
+    def save_detection_info_json(self, results, image_name: str, species_info: dict) -> str:
+        """保存探测结果信息到JSON文件
+
+        Args:
+            results: YOLO检测结果
+            image_name: 原始图片名称
+            species_info: 物种信息字典
+
+        Returns:
+            保存的JSON文件路径或空字符串（如果保存失败）
+        """
+        if not results:
+            return ""
+
+        try:
+            import json
+            import os
+
+            # 创建临时保存目录
+            temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+            photo_path = os.path.join(temp_dir, "photo")
+            os.makedirs(photo_path, exist_ok=True)
+
+            # 构建要保存的数据
+            data_to_save = {
+                "物种名称": species_info.get('物种名称', ''),
+                "物种数量": species_info.get('物种数量', ''),
+                "最低置信度": species_info.get('最低置信度', ''),
+                "检测时间": species_info.get('检测时间', '')
+            }
+
+            # 添加边界框信息
+            boxes_info = []
+            for r in results:
+                for i, box in enumerate(r.boxes):
+                    cls_id = int(box.cls.item())
+                    species_name = r.names[cls_id]
+                    confidence = float(box.conf.item())
+                    bbox = [float(x) for x in box.xyxy.tolist()[0]]  # 转换为 [x1, y1, x2, y2] 格式
+
+                    box_info = {
+                        "物种": species_name,
+                        "置信度": confidence,
+                        "边界框": bbox
+                    }
+                    boxes_info.append(box_info)
+
+            data_to_save["检测框"] = boxes_info
+
+            # 生成JSON文件路径（与图片同名，但扩展名为.json）
+            base_name, _ = os.path.splitext(image_name)
+            json_path = os.path.join(photo_path, f"{base_name}.json")
+
+            # 保存JSON文件
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(data_to_save, f, ensure_ascii=False, indent=4)
+
+            return json_path
+        except Exception as e:
+            logger.error(f"保存检测结果JSON失败: {e}")
+            return ""
