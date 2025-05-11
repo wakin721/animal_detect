@@ -311,6 +311,7 @@ class ObjectDetectionGUI:
         self.use_fp16_var = tk.BooleanVar(value=False)  # FP16加速，默认开启
         self.use_augment_var = tk.BooleanVar(value=True)  # 数据增强，默认开启
         self.use_agnostic_nms_var = tk.BooleanVar(value=True)  # 类别无关NMS，默认开启
+        self.current_path = None
 
         # 创建参数控件 - 使用网格布局
         params_frame.columnconfigure(0, weight=1)
@@ -953,7 +954,7 @@ FP16加速 (半精度浮点数加速)
         if success:
             logger.info("设置已保存")
             # 可选: 在状态栏显示保存成功信息
-            # self.status_bar.status_label.config(text="设置已保存")
+            self.status_bar.status_label.config(text="设置已保存")
 
     def _load_settings_to_ui(self, settings: Dict[str, Any]) -> None:
         """将设置应用到UI元素
@@ -966,6 +967,7 @@ FP16加速 (半精度浮点数加速)
             if "file_path" in settings and settings["file_path"] and os.path.exists(settings["file_path"]):
                 self.file_path_entry.delete(0, tk.END)
                 self.file_path_entry.insert(0, settings["file_path"])
+                self.current_path = settings["file_path"]
                 # 如果是目录，更新文件列表
                 if os.path.isdir(settings["file_path"]):
                     self.update_file_list(settings["file_path"])
@@ -1042,8 +1044,7 @@ FP16加速 (半精度浮点数加速)
         folder_selected = filedialog.askdirectory(title="选择图像文件所在文件夹")
         if folder_selected:
             # 如果选择了新的文件夹，则清空临时图像目录
-            current_path = self.file_path_entry.get()
-            if current_path != folder_selected:
+            if self.current_path != folder_selected:
                 self._clean_temp_photo_directory()
 
             self.file_path_entry.delete(0, tk.END)
@@ -1260,15 +1261,16 @@ FP16加速 (半精度浮点数加速)
 
     def save_file_path_by_enter(self, event) -> None:
         """处理文件路径输入框的回车键事件"""
-        file_path = self.file_path_entry.get()
-        if os.path.isdir(file_path):
-            # 如果是新的文件夹路径，则清空临时图像目录
-            current_selection = self.file_listbox.get(0, tk.END)
-            if not current_selection or os.path.dirname(os.path.join(file_path, current_selection[0])) != file_path.replace("\\","/"):
+        folder_selected = self.file_path_entry.get()
+        if os.path.isdir(folder_selected):
+            # 如果选择了新的文件夹，则清空临时图像目录
+            if folder_selected != self.current_path:
                 self._clean_temp_photo_directory()
 
-            self.update_file_list(file_path)
-            self.status_bar.status_label.config(text=f"已设置文件路径: {file_path}")
+            self.current_path = folder_selected
+            self.update_file_list(folder_selected)
+            self.status_bar.status_label.config(text=f"已设置文件路径: {folder_selected}")
+
         else:
             messagebox.showerror("错误", "输入的文件路径无效，请检查。\n请确保路径指向一个文件夹。")
 
@@ -2177,7 +2179,6 @@ FP16加速 (半精度浮点数加速)
             # 获取临时图像目录路径
             temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
             photo_path = os.path.join(temp_dir, "photo")
-            print(photo_path)
 
             # 如果目录存在，清空其中的所有文件
             if os.path.exists(photo_path):

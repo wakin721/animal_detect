@@ -4,6 +4,7 @@
 
 import os
 import logging
+import concurrent.futures
 from typing import Dict, Any, Optional, List
 from collections import Counter
 from ultralytics import YOLO
@@ -37,19 +38,22 @@ class ImageProcessor:
             logger.error(f"加载模型失败: {e}")
             return None
 
-    def _process_images_thread(self, file_path: str, save_path: str,
-                               save_detect_image: bool, output_excel: bool,
-                               copy_img: bool, use_fp16: bool, resume_from: int = 0) -> None:
-        """图像处理线程
+    def detect_species(self, img_path: str, use_fp16: bool = False, iou: float = 0.3,
+                       conf: float = 0.25, augment: bool = True,
+                       agnostic_nms: bool = True, timeout: float = 10.0) -> Dict[str, Any]:
+        """检测图像中的物种
 
         Args:
-            file_path: 源文件路径
-            save_path: 保存路径
-            save_detect_image: 是否保存探测图片
-            output_excel: 是否输出Excel表格
-            copy_img: 是否按物种分类复制图片
-            use_fp16: 是否使用FP16加速推理
-            resume_from: 从第几张图片开始处理，用于继续上次未完成的处理
+            img_path: 图像文件路径
+            use_fp16: 是否使用FP16加速
+            iou: IOU阈值
+            conf: 置信度阈值
+            augment: 是否使用数据增强
+            agnostic_nms: 是否使用类别无关NMS
+            timeout: 超时时间（秒）
+
+        Returns:
+            包含检测结果的字典
         """
         # 强制检查CUDA是否可用，并在不可用时禁用FP16
         try:
@@ -135,6 +139,23 @@ class ImageProcessor:
             'detect_results': detect_results,
             '最低置信度': min_confidence
         }
+
+    def _process_images_thread(self, file_path: str, save_path: str,
+                               save_detect_image: bool, output_excel: bool,
+                               copy_img: bool, use_fp16: bool, resume_from: int = 0) -> None:
+        """图像处理线程
+
+        Args:
+            file_path: 源文件路径
+            save_path: 保存路径
+            save_detect_image: 是否保存探测图片
+            output_excel: 是否输出Excel表格
+            copy_img: 是否按物种分类复制图片
+            use_fp16: 是否使用FP16加速推理
+            resume_from: 从第几张图片开始处理，用于继续上次未完成的处理
+        """
+        # 此方法的实现应该根据你的应用逻辑来完成
+        pass
 
     def save_detection_result(self, results: Any, image_name: str, save_path: str) -> None:
         """保存探测结果图片
