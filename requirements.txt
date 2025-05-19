@@ -1,24 +1,5 @@
 # Core machine learning and computer vision
-tensorflow>=2.8.0
+pillow>=11.2.1
 opencv-python>=4.5.5
-numpy>=1.22.0
-pillow>=9.0.0
-
-# Data handling
-pandas>=1.4.0
-openpyxl>=3.0.9
-xlsxwriter>=3.0.2
-
-# GUI enhancements (beyond basic tkinter)
-customtkinter>=4.6.0
-ttkthemes>=3.2.0
-
-# Utilities
-matplotlib>=3.5.1
-scikit-learn>=1.0.2
-scikit-image>=0.19.1
-
-# Progress reporting
-tqdm>=4.62.3
-
 sv_ttk>=2.6.0
+ultralytics>=8.3.140
