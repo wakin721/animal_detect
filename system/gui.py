@@ -48,6 +48,14 @@ class ObjectDetectionGUI:
             cache_data: 处理缓存数据
             resume_processing: 是否继续上次的处理
         """
+
+        # 创建设置变量
+        self.iou_var = tk.DoubleVar(value=0.3)  # IOU阈值
+        self.conf_var = tk.DoubleVar(value=0.25)  # 置信度阈值
+        self.use_fp16_var = tk.BooleanVar(value=False)  # 是否使用半精度
+        self.use_augment_var = tk.BooleanVar(value=True)  # 是否使用增强
+        self.use_agnostic_nms_var = tk.BooleanVar(value=True)  # 是否使用类别无关NMS
+
         self.master = master
         master.title(APP_TITLE)
 
@@ -121,6 +129,7 @@ class ObjectDetectionGUI:
             self.master.after(1000, self._resume_processing)
 
         self.setup_theme_monitoring()
+        self._bind_events()
 
 
     def _resume_processing(self) -> None:
@@ -683,131 +692,575 @@ class ObjectDetectionGUI:
         # 填充环境维护标签页内容
         self._create_env_maintenance_content()
 
-        # 按钮区域 (共享区域，位于标签页下方)
-        buttons_frame = ttk.Frame(self.advanced_page)
-        buttons_frame.pack(fill="x", padx=20, pady=10)
-
-        # 查看参数说明按钮
-        help_button = ttk.Button(
-            buttons_frame, text="查看参数说明", command=self.show_params_help, width=12)
-        help_button.pack(side="left")
-
-        # 恢复默认参数按钮
-        reset_button = ttk.Button(
-            buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=12)
-        reset_button.pack(side="right")
-
     def _create_model_params_content(self) -> None:
-        """创建模型参数设置标签页内容"""
-        # 模型参数设置
-        params_frame = ttk.LabelFrame(self.model_params_tab, text="模型参数设置")
-        params_frame.pack(fill="x", pady=10)
+        """创建模型参数设置内容 - 使用可折叠面板"""
 
-        # 参数内容框架
-        params_content = ttk.Frame(params_frame)
-        params_content.pack(fill="x", padx=10, pady=10)
+        # 创建Canvas和滚动条以支持滚动
+        self.params_canvas = tk.Canvas(self.model_params_tab, bg=self.master.cget('bg'), highlightthickness=0)
+        self.params_scrollbar = ttk.Scrollbar(self.model_params_tab, orient="vertical",
+                                              command=self.params_canvas.yview)
 
-        # 初始化模型参数变量
-        self.iou_var = tk.DoubleVar(value=0.3)  # IOU阈值，默认0.3
-        self.conf_var = tk.DoubleVar(value=0.25)  # 置信度阈值，默认0.25
-        self.use_augment_var = tk.BooleanVar(value=True)  # 数据增强，默认开启
-        self.use_agnostic_nms_var = tk.BooleanVar(value=True)  # 类别无关NMS，默认开启
-        self.current_path = None
+        self.params_canvas.configure(yscrollcommand=self.params_scrollbar.set)
+        self.params_scrollbar.pack(side="right", fill="y")
+        self.params_canvas.pack(side="left", fill="both", expand=True)
 
-        # IOU阈值滑动条
-        ttk.Label(params_content, text="IOU阈值:").grid(row=0, column=0, sticky="w", pady=(10, 0))
+        # 创建内容框架
+        self.params_content_frame = ttk.Frame(self.params_canvas)
+        self.params_canvas_window = self.params_canvas.create_window(
+            (0, 0),
+            window=self.params_content_frame,
+            anchor="nw",
+            width=self.params_canvas.winfo_width()
+        )
 
-        iou_frame = ttk.Frame(params_content)
-        iou_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        # 确保系统变量已初始化
+        if not hasattr(self, 'is_dark_mode'):
+            self.is_dark_mode = False
 
-        iou_scale = ttk.Scale(iou_frame, from_=0.1, to=0.9, orient="horizontal",
-                              variable=self.iou_var, command=self._update_iou_label)
-        iou_scale.pack(side="left", fill="x", expand=True)
+        # 创建检测阈值面板
+        self.threshold_panel = CollapsiblePanel(
+            self.params_content_frame,
+            title="检测阈值设置",
+            subtitle="调整目标检测的置信度和重叠度阈值",
+            icon="🎯"
+        )
+        self.threshold_panel.pack(fill="x", expand=False, pady=(0, 1))
 
-        self.iou_label = ttk.Label(iou_frame, text="0.30", width=4)
-        self.iou_label.pack(side="right", padx=(10, 0))
+        # 创建IOU阈值设置
+        iou_frame = ttk.Frame(self.threshold_panel.content_padding)
+        iou_frame.pack(fill="x", pady=5)
 
-        # 置信度阈值滑动条
-        ttk.Label(params_content, text="置信度阈值:").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        # IOU阈值标签和滑块
+        iou_label_frame = ttk.Frame(iou_frame)
+        iou_label_frame.pack(fill="x", pady=(0, 5))
 
-        conf_frame = ttk.Frame(params_content)
-        conf_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        ttk.Label(iou_label_frame, text="IOU阈值").pack(side="left")
+        self.iou_label = ttk.Label(iou_label_frame, text="0.30")
+        self.iou_label.pack(side="right")
 
-        conf_scale = ttk.Scale(conf_frame, from_=0.05, to=0.95, orient="horizontal",
-                               variable=self.conf_var, command=self._update_conf_label)
-        conf_scale.pack(side="left", fill="x", expand=True)
+        # 使用已定义的iou_var而不是创建新的iou_threshold_var
+        self.iou_var.set(0.30)  # 设置初始值
+        iou_scale = ttk.Scale(
+            iou_frame,
+            from_=0.1,
+            to=0.9,
+            orient="horizontal",
+            variable=self.iou_var,
+            command=self._update_iou_label
+        )
+        iou_scale.pack(fill="x")
 
-        self.conf_label = ttk.Label(conf_frame, text="0.25", width=4)
-        self.conf_label.pack(side="right", padx=(10, 0))
+        # 创建置信度阈值设置
+        conf_frame = ttk.Frame(self.threshold_panel.content_padding)
+        conf_frame.pack(fill="x", pady=10)
 
-        # 模型优化选项
-        options_frame = ttk.LabelFrame(self.model_params_tab, text="模型优化选项")
-        options_frame.pack(fill="x", pady=10)
+        # 置信度阈值标签和滑块
+        conf_label_frame = ttk.Frame(conf_frame)
+        conf_label_frame.pack(fill="x", pady=(0, 5))
 
-        options_content = ttk.Frame(options_frame)
-        options_content.pack(fill="x", padx=10, pady=10)
+        ttk.Label(conf_label_frame, text="置信度阈值").pack(side="left")
+        self.conf_label = ttk.Label(conf_label_frame, text="0.25")
+        self.conf_label.pack(side="right")
 
-        # FP16加速
-        fp16_frame = ttk.Frame(options_content)
+        # 使用已定义的conf_var而不是创建新的conf_threshold_var
+        self.conf_var.set(0.25)  # 设置初始值
+        conf_scale = ttk.Scale(
+            conf_frame,
+            from_=0.05,
+            to=0.95,
+            orient="horizontal",
+            variable=self.conf_var,
+            command=self._update_conf_label
+        )
+        conf_scale.pack(fill="x")
+
+        # 创建模型加速选项面板
+        self.accel_panel = CollapsiblePanel(
+            self.params_content_frame,
+            title="模型加速选项",
+            subtitle="控制推理速度与精度的平衡",
+            icon="⚡"
+        )
+        self.accel_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # FP16加速选项
+        fp16_frame = ttk.Frame(self.accel_panel.content_padding)
         fp16_frame.pack(fill="x", pady=5)
 
-        fp16_switch = ttk.Checkbutton(
-            fp16_frame, text="使用FP16加速推理", variable=self.use_fp16_var)
-        fp16_switch.pack(anchor="w")
-
-        # 如果CUDA不可用，禁用FP16开关
-        if not self.cuda_available:
-            fp16_switch["state"] = "disabled"
-            self.use_fp16_var.set(False)
-
-        fp16_desc = ttk.Label(
+        self.use_fp16_var = tk.BooleanVar(value=True if self.cuda_available else False)
+        fp16_check = ttk.Checkbutton(
             fp16_frame,
-            text="减少内存使用并提高速度，可能略微降低精度",
-            font=SMALL_FONT,
-            foreground="gray")
-        fp16_desc.pack(anchor="w", padx=25, pady=(0, 5))
+            text="使用FP16加速 (需要支持CUDA)",
+            variable=self.use_fp16_var,
+            state="normal" if self.cuda_available else "disabled"
+        )
+        fp16_check.pack(anchor="w")
 
-        # 数据增强
-        augment_frame = ttk.Frame(options_content)
+        # 如果不支持CUDA，添加提示信息
+        if not self.cuda_available:
+            cuda_warning = ttk.Label(
+                fp16_frame,
+                text="未检测到CUDA，FP16加速已禁用",
+                foreground="red"
+            )
+            cuda_warning.pack(anchor="w", pady=(5, 0))
+
+        # 创建高级检测选项面板
+        self.advanced_detect_panel = CollapsiblePanel(
+            self.params_content_frame,
+            title="高级检测选项",
+            subtitle="配置增强检测功能和特殊选项",
+            icon="🔍"
+        )
+        self.advanced_detect_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # 数据增强选项
+        augment_frame = ttk.Frame(self.advanced_detect_panel.content_padding)
         augment_frame.pack(fill="x", pady=5)
 
-        augment_switch = ttk.Checkbutton(
-            augment_frame, text="使用数据增强", variable=self.use_augment_var)
-        augment_switch.pack(anchor="w")
-
-        augment_desc = ttk.Label(
+        self.use_augment_var = tk.BooleanVar(value=False)
+        augment_check = ttk.Checkbutton(
             augment_frame,
-            text="通过测试时增强提高检测准确性，但会降低速度",
-            font=SMALL_FONT,
-            foreground="gray")
-        augment_desc.pack(anchor="w", padx=25, pady=(0, 5))
+            text="使用数据增强 (Test-Time Augmentation)",
+            variable=self.use_augment_var
+        )
+        augment_check.pack(anchor="w")
 
-        # 类别无关NMS
-        nms_frame = ttk.Frame(options_content)
-        nms_frame.pack(fill="x", pady=5)
+        # 类别无关NMS选项
+        agnostic_frame = ttk.Frame(self.advanced_detect_panel.content_padding)
+        agnostic_frame.pack(fill="x", pady=5)
 
-        agnostic_nms_switch = ttk.Checkbutton(
-            nms_frame, text="使用类别无关NMS", variable=self.use_agnostic_nms_var)
-        agnostic_nms_switch.pack(anchor="w")
+        self.use_agnostic_nms_var = tk.BooleanVar(value=False)
+        agnostic_check = ttk.Checkbutton(
+            agnostic_frame,
+            text="使用类别无关NMS (Class-Agnostic NMS)",
+            variable=self.use_agnostic_nms_var
+        )
+        agnostic_check.pack(anchor="w")
 
-        agnostic_nms_desc = ttk.Label(
-            nms_frame,
-            text="忽略类别信息进行非极大值抑制，对多类别场景有优势",
-            font=SMALL_FONT,
-            foreground="gray")
-        agnostic_nms_desc.pack(anchor="w", padx=25, pady=(0, 5))
+        # 添加分隔线和底部按钮区域（与上面折叠面板分离）
+        separator = ttk.Separator(self.params_content_frame, orient="horizontal")
+        separator.pack(fill="x", pady=15)
 
-    def _create_env_maintenance_content(self) -> None:
-        """创建环境维护标签页内容"""
-        # 初始化折叠卡片存储器
-        if not hasattr(self, 'advanced_cards'):
-            self.advanced_cards = {}
+        # 参数说明和重置按钮区域
+        button_frame = ttk.Frame(self.params_content_frame)
+        button_frame.pack(fill="x", pady=10)
 
-        # 创建模型选择卡片
-        self._create_model_selection_card(self.env_maintenance_tab)
+        help_button = ttk.Button(
+            button_frame,
+            text="参数说明",
+            command=self.show_params_help,
+            width=BUTTON_WIDTH
+        )
+        help_button.pack(side="left", padx=10)
 
-        # 创建PyTorch安装卡片
-        self._create_pytorch_install_card(self.env_maintenance_tab)
+        reset_button = ttk.Button(
+            button_frame,
+            text="重置为默认值",
+            command=self._reset_model_params,
+            width=BUTTON_WIDTH
+        )
+        reset_button.pack(side="right", padx=10)
+
+        # 绑定面板切换回调
+        for panel in [self.threshold_panel, self.accel_panel, self.advanced_detect_panel]:
+            panel.bind_toggle_callback(self._on_panel_toggle)
+
+        # 默认关闭第一个面板（而不是默认展开）
+        self.threshold_panel.collapse()
+
+        # 配置滚动
+        self._configure_params_scrolling()
+
+        # 确保初始化完成后内容在顶部
+        self.master.after(100, lambda: self.params_canvas.yview_moveto(0.0))
+
+    def show_params_help(self) -> None:
+        """显示参数说明弹窗"""
+        help_window = tk.Toplevel(self.master)
+        help_window.title("参数说明")
+        help_window.geometry("600x400")
+        help_window.minsize(500, 350)
+
+        # 尝试使用与主窗口相同的图标
+        try:
+            ico_path = resource_path(os.path.join("res", "ico.ico"))
+            help_window.iconbitmap(ico_path)
+        except Exception:
+            pass
+
+        # 使窗口模态，用户必须先关闭此窗口才能操作主窗口
+        help_window.transient(self.master)
+        help_window.grab_set()
+
+        # 创建滚动文本区
+        frame = ttk.Frame(help_window, padding=15)
+        frame.pack(fill="both", expand=True)
+
+        # 创建带滚动条的文本区
+        text_frame = ttk.Frame(frame)
+        text_frame.pack(fill="both", expand=True, pady=(0, 15))
+
+        text_widget = tk.Text(text_frame, wrap="word", padx=10, pady=10)
+        scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        text_widget.pack(side="left", fill="both", expand=True)
+
+        # 设置文本样式
+        text_widget.tag_configure("title", font=("Segoe UI", 12, "bold"), spacing3=10)
+        text_widget.tag_configure("subtitle", font=("Segoe UI", 10, "bold"), spacing3=5, spacing1=10)
+        text_widget.tag_configure("normal", font=("Segoe UI", 9), spacing2=2)
+
+        # 添加帮助文本内容
+        text_widget.insert("end", "模型参数详细说明\n", "title")
+
+        text_widget.insert("end", "检测阈值设置\n", "subtitle")
+        text_widget.insert("end",
+                           "• IOU阈值：控制目标框重叠判定的阈值，范围0.1-0.9。较高的值会减少重叠框，但可能导致部分目标漏检；较低的值可能导致同一目标多次检测。一般建议设置在0.3-0.5之间。\n\n",
+                           "normal")
+        text_widget.insert("end",
+                           "• 置信度阈值：控制检测结果的可信度阈值，范围0.05-0.95。较高的值只显示高置信度的检测结果，减少误检；较低的值会显示更多可能的目标，但可能增加误检率。默认值0.25适用于多数场景。\n\n",
+                           "normal")
+
+        text_widget.insert("end", "模型加速选项\n", "subtitle")
+        text_widget.insert("end",
+                           "• 使用FP16加速：启用后使用半精度浮点计算加速模型推理，可提高处理速度但可能略微降低精度。此选项需要CUDA支持，对于不支持CUDA的系统将自动禁用。\n\n",
+                           "normal")
+
+        text_widget.insert("end", "高级检测选项\n", "subtitle")
+        text_widget.insert("end",
+                           "• 使用数据增强：启用Test-Time Augmentation (TTA)，通过对输入图像进行多种变换并综合结果，提高检测精度。缺点是会显著降低处理速度，建议只在需要高精度结果时启用。\n\n",
+                           "normal")
+        text_widget.insert("end",
+                           "• 使用类别无关NMS：Non-Maximum Suppression在所有类别上统一应用，而不是每个类别单独应用。这对于检测多种相互重叠的物种尤为有用，可以减少框重叠问题。\n\n",
+                           "normal")
+
+        # 设置文本为只读
+        text_widget.config(state="disabled")
+
+        # 关闭按钮
+        close_button = ttk.Button(frame, text="关闭", command=help_window.destroy, width=10)
+        close_button.pack(side="right")
+
+        # 将窗口定位到主窗口中央
+        help_window.update_idletasks()
+        width = help_window.winfo_width()
+        height = help_window.winfo_height()
+        x = self.master.winfo_rootx() + (self.master.winfo_width() - width) // 2
+        y = self.master.winfo_rooty() + (self.master.winfo_height() - height) // 2
+        help_window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _reset_model_params(self) -> None:
+        """重置模型参数到默认值"""
+        # 重置IOU阈值
+        self.iou_var.set(0.3)
+        self._update_iou_label(0.3)
+
+        # 重置置信度阈值
+        self.conf_var.set(0.25)
+        self._update_conf_label(0.25)
+
+        # 重置FP16选项（根据CUDA可用性）
+        self.use_fp16_var.set(True if self.cuda_available else False)
+
+        # 重置高级选项
+        self.use_augment_var.set(False)
+        self.use_agnostic_nms_var.set(False)
+
+        # 显示重置成功消息
+        self.status_bar.show_message("已重置所有参数到默认值", 3000)
+
+    def _configure_params_scrolling(self):
+        """配置模型参数设置标签页的滚动功能 - 完全修复顶部空白问题"""
+
+        # 更新滚动区域尺寸
+        def _update_scrollregion(event=None):
+            self.params_canvas.configure(scrollregion=self.params_canvas.bbox("all"))
+
+        # 当Canvas大小改变时，调整窗口宽度
+        def _configure_canvas(event):
+            # 设置内容框架宽度与Canvas相同
+            canvas_width = event.width
+            self.params_canvas.itemconfigure(self.params_canvas_window, width=canvas_width)
+
+        # 处理鼠标滚轮事件 - 关键改进部分
+        def _on_mousewheel(event):
+            # 获取当前Canvas视图
+            view_pos = self.params_canvas.yview()
+
+            # 计算滚动方向和单位
+            if platform.system() == "Windows":
+                delta = -1 if event.delta > 0 else 1
+            elif platform.system() == "Darwin":  # macOS
+                delta = -1 if event.delta > 0 else 1
+            elif hasattr(event, 'num'):
+                delta = -1 if event.num == 4 else 1
+            else:
+                return  # 未知事件类型，不处理
+
+            # 如果是向上滚动且已经接近顶部，直接滚到顶部
+            if delta < 0 and view_pos[0] < 0.1:
+                self.params_canvas.yview_moveto(0)
+            else:
+                self.params_canvas.yview_scroll(delta, "units")
+
+            # 防止滚过头 - 始终检查并修正顶部位置
+            if self.params_canvas.yview()[0] < 0.001:  # 非常接近顶部但不是0
+                self.params_canvas.yview_moveto(0)  # 强制设置为顶部
+
+            # 阻止事件继续传播，避免页面跳动
+            return "break"
+
+        # 绑定滚动事件到Canvas
+        self.params_canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows
+        self.params_canvas.bind("<Button-4>", _on_mousewheel)  # Linux向上滚动
+        self.params_canvas.bind("<Button-5>", _on_mousewheel)  # Linux向下滚动
+
+        # 配置基础事件
+        self.params_content_frame.bind("<Configure>", _update_scrollregion)
+        self.params_canvas.bind("<Configure>", _configure_canvas)
+
+        # 重要：添加特殊处理确保滚动条位置正确
+        def _on_scrollbar_scroll(*args):
+            # 如果滚动条正在移向顶部位置，确保完全到顶
+            if float(args[1]) <= 0.001:
+                self.master.after(10, lambda: self.params_canvas.yview_moveto(0))
+
+        # 直接监听滚动条的移动
+        self.params_scrollbar.configure(command=lambda *args: [
+            self.params_canvas.yview(*args),  # 原始滚动行为
+            _on_scrollbar_scroll(*args)  # 额外处理
+        ])
+
+        # 添加进入和离开Canvas的事件处理 - 改进的全局滚动处理
+        def _on_enter(event):
+            # 绑定全局滚轮事件
+            if platform.system() == "Windows":
+                self.master.bind_all("<MouseWheel>", _on_mousewheel)
+            else:  # Linux和macOS
+                self.master.bind_all("<Button-4>", _on_mousewheel)
+                self.master.bind_all("<Button-5>", _on_mousewheel)
+
+        def _on_leave(event):
+            # 解绑全局滚轮事件
+            if platform.system() == "Windows":
+                self.master.unbind_all("<MouseWheel>")
+            else:  # Linux和macOS
+                self.master.unbind_all("<Button-4>")
+                self.master.unbind_all("<Button-5>")
+
+        self.params_canvas.bind("<Enter>", _on_enter)
+        self.params_canvas.bind("<Leave>", _on_leave)
+
+        # 强制初始滚动位置为顶部
+        self.params_content_frame.update_idletasks()
+        self.params_canvas.configure(scrollregion=self.params_canvas.bbox("all"))
+        self.params_canvas.yview_moveto(0.0)
+
+    def _create_model_params_content(self) -> None:
+        """创建模型参数设置内容 - 使用可折叠面板"""
+
+        # 创建Canvas和滚动条以支持滚动
+        self.params_canvas = tk.Canvas(self.model_params_tab, bg=self.master.cget('bg'), highlightthickness=0)
+        self.params_scrollbar = ttk.Scrollbar(self.model_params_tab, orient="vertical",
+                                              command=self.params_canvas.yview)
+
+        self.params_canvas.configure(yscrollcommand=self.params_scrollbar.set)
+        self.params_scrollbar.pack(side="right", fill="y")
+        self.params_canvas.pack(side="left", fill="both", expand=True)
+
+        # 创建内容框架 - 确保始终在顶部
+        self.params_content_frame = ttk.Frame(self.params_canvas)
+        self.params_canvas_window = self.params_canvas.create_window(
+            (0, 0),  # 关键是这里的坐标要确保是(0, 0)
+            window=self.params_content_frame,
+            anchor="nw",  # 始终固定在左上角
+            width=self.params_canvas.winfo_width()
+        )
+
+        # 确保系统变量已初始化
+        if not hasattr(self, 'is_dark_mode'):
+            self.is_dark_mode = False
+
+        # 确保 iou_var 和 conf_var 已初始化
+        if not hasattr(self, 'iou_var'):
+            self.iou_var = tk.DoubleVar(value=0.3)
+
+        if not hasattr(self, 'conf_var'):
+            self.conf_var = tk.DoubleVar(value=0.25)
+
+        # 创建检测阈值面板
+        self.threshold_panel = CollapsiblePanel(
+            self.params_content_frame,
+            title="检测阈值设置",
+            subtitle="调整目标检测的置信度和重叠度阈值",
+            icon="🎯"
+        )
+        self.threshold_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # 创建IOU阈值设置
+        iou_frame = ttk.Frame(self.threshold_panel.content_padding)
+        iou_frame.pack(fill="x", pady=5)
+
+        # IOU阈值标签和滑块
+        iou_label_frame = ttk.Frame(iou_frame)
+        iou_label_frame.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(iou_label_frame, text="IOU阈值").pack(side="left")
+        self.iou_label = ttk.Label(iou_label_frame, text="0.30")
+        self.iou_label.pack(side="right")
+
+        # 使用已定义的iou_var而不是创建新的iou_threshold_var
+        self.iou_var.set(0.30)  # 设置初始值
+        iou_scale = ttk.Scale(
+            iou_frame,
+            from_=0.1,
+            to=0.9,
+            orient="horizontal",
+            variable=self.iou_var,
+            command=self._update_iou_label
+        )
+        iou_scale.pack(fill="x")
+
+        # 创建置信度阈值设置
+        conf_frame = ttk.Frame(self.threshold_panel.content_padding)
+        conf_frame.pack(fill="x", pady=10)
+
+        # 置信度阈值标签和滑块
+        conf_label_frame = ttk.Frame(conf_frame)
+        conf_label_frame.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(conf_label_frame, text="置信度阈值").pack(side="left")
+        self.conf_label = ttk.Label(conf_label_frame, text="0.25")
+        self.conf_label.pack(side="right")
+
+        # 使用已定义的conf_var而不是创建新的conf_threshold_var
+        self.conf_var.set(0.25)  # 设置初始值
+        conf_scale = ttk.Scale(
+            conf_frame,
+            from_=0.05,
+            to=0.95,
+            orient="horizontal",
+            variable=self.conf_var,
+            command=self._update_conf_label
+        )
+        conf_scale.pack(fill="x")
+
+        # 创建模型加速选项面板
+        self.accel_panel = CollapsiblePanel(
+            self.params_content_frame,
+            title="模型加速选项",
+            subtitle="控制推理速度与精度的平衡",
+            icon="⚡"
+        )
+        self.accel_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # FP16加速选项
+        fp16_frame = ttk.Frame(self.accel_panel.content_padding)
+        fp16_frame.pack(fill="x", pady=5)
+
+        self.use_fp16_var = tk.BooleanVar(value=True if self.cuda_available else False)
+        fp16_check = ttk.Checkbutton(
+            fp16_frame,
+            text="使用FP16加速 (需要支持CUDA)",
+            variable=self.use_fp16_var,
+            state="normal" if self.cuda_available else "disabled"
+        )
+        fp16_check.pack(anchor="w")
+
+        # 如果不支持CUDA，添加提示信息
+        if not self.cuda_available:
+            cuda_warning = ttk.Label(
+                fp16_frame,
+                text="未检测到CUDA，FP16加速已禁用",
+                foreground="red"
+            )
+            cuda_warning.pack(anchor="w", pady=(5, 0))
+
+        # 创建高级检测选项面板
+        self.advanced_detect_panel = CollapsiblePanel(
+            self.params_content_frame,
+            title="高级检测选项",
+            subtitle="配置增强检测功能和特殊选项",
+            icon="🔍"
+        )
+        self.advanced_detect_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # 数据增强选项
+        augment_frame = ttk.Frame(self.advanced_detect_panel.content_padding)
+        augment_frame.pack(fill="x", pady=5)
+
+        self.use_augment_var = tk.BooleanVar(value=False)
+        augment_check = ttk.Checkbutton(
+            augment_frame,
+            text="使用数据增强 (Test-Time Augmentation)",
+            variable=self.use_augment_var
+        )
+        augment_check.pack(anchor="w")
+
+        # 类别无关NMS选项
+        agnostic_frame = ttk.Frame(self.advanced_detect_panel.content_padding)
+        agnostic_frame.pack(fill="x", pady=5)
+
+        self.use_agnostic_nms_var = tk.BooleanVar(value=False)
+        agnostic_check = ttk.Checkbutton(
+            agnostic_frame,
+            text="使用类别无关NMS (Class-Agnostic NMS)",
+            variable=self.use_agnostic_nms_var
+        )
+        agnostic_check.pack(anchor="w")
+
+        # 添加分隔线和底部按钮区域（与上面折叠面板分离）
+        separator = ttk.Separator(self.params_content_frame, orient="horizontal")
+        separator.pack(fill="x", pady=15)
+
+        # 参数说明和重置按钮区域
+        bottom_frame = ttk.Frame(self.params_content_frame)
+        bottom_frame.pack(fill="x", pady=5)
+
+        # 参数说明区域
+        help_frame = ttk.Frame(bottom_frame, padding=10)
+        help_frame.pack(fill="x", pady=5)
+
+        help_title = ttk.Label(help_frame, text="参数说明", font=("Segoe UI", 10, "bold"))
+        help_title.pack(anchor="w")
+
+        help_text = ttk.Label(
+            help_frame,
+            text="IOU阈值控制目标框的重叠判定，置信度阈值控制检测结果的可信度，"
+                 "FP16加速可提高检测速度但需要CUDA支持，数据增强可提高检测精度但会降低速度，"
+                 "类别无关NMS适用于多种物种重叠场景。",
+            wraplength=550,
+            justify="left"
+        )
+        help_text.pack(anchor="w", pady=(5, 0))
+
+        # 重置按钮区域
+        button_frame = ttk.Frame(bottom_frame)
+        button_frame.pack(fill="x", pady=10)
+
+        reset_button = ttk.Button(
+            button_frame,
+            text="重置为默认值",
+            command=self._reset_model_params,
+            width=15
+        )
+        reset_button.pack(side="right", padx=10)
+
+        # 默认展开第一个面板
+        self.threshold_panel.expand()
+
+        # 绑定面板切换回调
+        for panel in [self.threshold_panel, self.accel_panel, self.advanced_detect_panel]:
+            panel.bind_toggle_callback(self._on_panel_toggle)
+
+        # 配置滚动
+        self._configure_params_scrolling()
+
+        # 额外确保初始化完成后内容在顶部
+        self.master.after(100, lambda: self.params_canvas.yview_moveto(0.0))
 
     def _create_model_selection_card(self, parent) -> None:
         """创建模型选择折叠卡片 - 与PyTorch安装卡片风格一致"""
@@ -1256,27 +1709,27 @@ class ObjectDetectionGUI:
     def _on_panel_toggle(self, panel, is_expanded):
         """处理面板展开/折叠事件 - 完全防止顶部空白"""
         # 记录当前滚动位置
-        current_pos = self.env_canvas.yview()
+        current_pos = self.params_canvas.yview()
         was_at_top = current_pos[0] <= 0.001
 
         # 允许面板重新计算其尺寸
-        self.env_content_frame.update_idletasks()
+        self.params_content_frame.update_idletasks()
 
         # 重新配置滚动区域
-        self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
+        self.params_canvas.configure(scrollregion=self.params_canvas.bbox("all"))
 
         # 如果之前在顶部，则保持在顶部
         if was_at_top:
-            self.env_canvas.yview_moveto(0.0)
+            self.params_canvas.yview_moveto(0.0)
 
         # 强制检查一次顶部空白
-        self.master.after(50, self._force_check_top)
+        self.master.after(50, self._force_check_params_top)
 
-    def _force_check_top(self):
-        """强制检查并修复顶部空白"""
-        current_pos = self.env_canvas.yview()
+    def _force_check_params_top(self):
+        """强制检查并修复模型参数页面顶部空白"""
+        current_pos = self.params_canvas.yview()
         if 0 < current_pos[0] < 0.01:  # 非常接近顶部但不是0
-            self.env_canvas.yview_moveto(0.0)
+            self.params_canvas.yview_moveto(0.0)
 
     def _toggle_card(self, card_id: str) -> None:
         """切换折叠卡片的展开/收起状态"""
