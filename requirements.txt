@@ -3,3 +3,4 @@ pillow>=11.2.1
 opencv-python>=4.5.5
 sv_ttk>=2.6.0
 ultralytics>=8.3.140
+darkdetect>=0.8.0
