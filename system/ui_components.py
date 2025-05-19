@@ -6,148 +6,220 @@ logger = logging.getLogger(__name__)
 
 
 class RoundedButton(tk.Canvas):
-    """圆角按钮实现"""
+    """圆角按钮实现 - 选中时在左侧显示高亮指示条"""
 
-    def __init__(self, parent, text="", command=None, radius=10, bg="#0078d7", fg="#ffffff",
-                 hover_bg=None, hover_fg=None, width=120, height=40, **kwargs):
-        """初始化圆角按钮"""
-        self.width = width
-        self.height = height
-        self.radius = radius
-        self.bg = bg
-        self.fg = fg
-        self.hover_bg = hover_bg if hover_bg else self._calculate_hover_color(bg)
-        self.hover_fg = hover_fg if hover_fg else fg
-        self.command = command
-        self.text = text
-        self.is_active = False
+    def __init__(self, parent, text="", command=None, bg="#2c3e50", fg="#ffffff",
+                 width=160, height=40, radius=10, highlight_color="#ffffff", **kwargs):
+        """初始化圆角按钮
 
-        # 获取父组件背景色
-        parent_bg = None
-        try:
-            # 尝试使用cget获取ttk组件的背景色
-            parent_bg = parent.cget("background")
-        except Exception:
-            # 如果失败，使用父组件的主题色或默认色
-            parent_bg = bg
-
-        # 创建画布
+        Args:
+            parent: 父级窗口
+            text: 按钮文本
+            command: 点击回调函数
+            bg: 背景色
+            fg: 文字颜色
+            width: 按钮宽度
+            height: 按钮高度
+            radius: 圆角半径
+            highlight_color: 高亮指示条颜色
+        """
         super().__init__(
             parent,
-            width=self.width,
-            height=self.height,
+            width=width,
+            height=height,
+            bg=bg,
             highlightthickness=0,
-            bg=parent_bg,
             **kwargs
         )
 
-        # 绘制按钮
-        self._draw_button()
+        self.bg = bg
+        self.fg = fg
+        self.command = command
+        self.radius = radius
+        self.text = text
+        self.width = width
+        self.height = height
+        self.active = False  # 默认非激活状态
+        self.highlight_color = highlight_color
+
+        # 计算悬停状态的颜色
+        r, g, b = [int(self.bg[i:i + 2], 16) for i in (1, 3, 5)]
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+
+        if brightness < 128:  # 深色背景
+            # 变亮
+            self.hover_bg = f"#{min(255, int(r * 1.3)):02x}{min(255, int(g * 1.3)):02x}{min(255, int(b * 1.3)):02x}"
+        else:
+            # 变暗
+            self.hover_bg = f"#{max(0, int(r * 0.9)):02x}{max(0, int(g * 0.9)):02x}{max(0, int(b * 0.9)):02x}"
+
+        # 绘制初始状态
+        self._draw_button("normal")
 
         # 绑定事件
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
-        self.bind("<Button-1>", self._on_click)
-        self.bind("<ButtonRelease-1>", self._on_release)
 
-    def _calculate_hover_color(self, color):
-        """计算悬停颜色"""
-        try:
-            # 将十六进制颜色转换为RGB
-            r = int(color[1:3], 16)
-            g = int(color[3:5], 16)
-            b = int(color[5:7], 16)
+    def _draw_button(self, state="normal"):
+        """绘制按钮，根据状态使用不同的背景色
 
-            # 计算亮度
-            brightness = (r * 299 + g * 587 + b * 114) / 1000
-
-            if brightness > 128:
-                # 使颜色变暗
-                factor = 0.8
-                r = max(0, int(r * factor))
-                g = max(0, int(g * factor))
-                b = max(0, int(b * factor))
-            else:
-                # 使颜色变亮
-                factor = 1.2
-                r = min(255, int(r * factor))
-                g = min(255, int(g * factor))
-                b = min(255, int(b * factor))
-
-            return f"#{r:02x}{g:02x}{b:02x}"
-        except Exception as e:
-            logger.warning(f"计算悬停颜色失败: {e}")
-            return "#3d6a99"  # 默认悬停色
-
-    def _draw_button(self):
-        """绘制按钮"""
-        # 清除画布
+        Args:
+            state: 按钮状态，可选值为 "normal", "hover", "active"
+        """
+        # 清除所有内容
         self.delete("all")
 
-        # 确定当前颜色
-        current_bg = self.hover_bg if self.is_active else self.bg
-        current_fg = self.hover_fg if self.is_active else self.fg
+        # 根据状态选择背景色
+        if state == "active":
+            bg_color = self.bg  # 选中时使用原始背景色
+            font_style = ("Segoe UI", 11, "bold")  # 选中时文字加粗
+        elif state == "hover":
+            bg_color = self.hover_bg
+            font_style = ("Segoe UI", 11)
+        else:  # normal
+            bg_color = self.bg
+            font_style = ("Segoe UI", 11)
 
         # 绘制圆角矩形
-        self.create_rounded_rect(0, 0, self.width, self.height, self.radius, fill=current_bg)
+        radius = self.radius
+        width = self.width
+        height = self.height
 
-        # 绘制文字
-        self.create_text(
-            self.width // 2,
-            self.height // 2,
-            text=self.text,
-            fill=current_fg,
-            font=("Segoe UI", 11),
-            anchor="center"
+        # 绘制主体矩形
+        self.create_rectangle(
+            radius, 0,
+            width - radius, height,
+            fill=bg_color, outline="", tags="body"
         )
 
-    def create_rounded_rect(self, x1, y1, x2, y2, radius, **kwargs):
-        """绘制圆角矩形"""
-        points = [
-            # 左上角圆弧
-            x1 + radius, y1,
-            x2 - radius, y1,
-            # 右上角圆弧
-            x2, y1,
-            x2, y1 + radius,
-            # 右下角圆弧
-            x2, y2 - radius,
-            x2, y2,
-            x2 - radius, y2,
-            # 左下角圆弧
-            x1 + radius, y2,
-            x1, y2,
-            x1, y2 - radius,
-            # 左上角圆弧完成
-            x1, y1 + radius,
-            x1, y1
-        ]
-        return self.create_polygon(points, **kwargs, smooth=True)
+        # 绘制左右侧矩形
+        self.create_rectangle(
+            0, radius,
+            radius, height - radius,
+            fill=bg_color, outline="", tags="body"
+        )
 
-    def _on_enter(self, event):
-        """鼠标进入事件"""
-        self.is_active = True
-        self._draw_button()
+        self.create_rectangle(
+            width - radius, radius,
+            width, height - radius,
+            fill=bg_color, outline="", tags="body"
+        )
 
-    def _on_leave(self, event):
-        """鼠标离开事件"""
-        self.is_active = False
-        self._draw_button()
+        # 绘制四个角的圆弧
+        self.create_arc(
+            0, 0, radius * 2, radius * 2,
+            start=90, extent=90, fill=bg_color, outline=""
+        )
 
-    def _on_click(self, event):
-        """鼠标点击事件"""
-        pass
+        self.create_arc(
+            width - radius * 2, 0, width, radius * 2,
+            start=0, extent=90, fill=bg_color, outline=""
+        )
 
-    def _on_release(self, event):
-        """鼠标释放事件"""
+        self.create_arc(
+            width - radius * 2, height - radius * 2, width, height,
+            start=270, extent=90, fill=bg_color, outline=""
+        )
+
+        self.create_arc(
+            0, height - radius * 2, radius * 2, height,
+            start=180, extent=90, fill=bg_color, outline=""
+        )
+
+        # 如果是激活状态，添加左侧高亮指示条
+        if state == "active":
+            # 设置缩短的高亮指示条参数
+            indicator_width = 2  # 指示条宽度
+            indicator_height = height * 0.6  # 指示条高度为按钮高度的60%
+            indicator_y_offset = (height - indicator_height) / 2  # 垂直居中
+
+            # 使用固定坐标确保上下半圆对齐
+            x_left = 0
+            x_right = indicator_width
+
+            # 计算半圆直径
+            circle_diameter = indicator_width * 2
+
+            # 计算矩形的上下边界
+            rect_top = indicator_y_offset + circle_diameter / 2
+            rect_bottom = indicator_y_offset + indicator_height - circle_diameter / 2
+
+            # 绘制主体矩形部分
+            if rect_bottom > rect_top:  # 确保有中间部分
+                self.create_rectangle(
+                    x_left,
+                    rect_top,
+                    x_right * 2,
+                    rect_bottom,
+                    fill=self.highlight_color,
+                    outline="",
+                    tags="highlight"
+                )
+
+            # 绘制上半圆 - 确保位置精确对齐
+            self.create_arc(
+                x_left,
+                indicator_y_offset,
+                circle_diameter,
+                indicator_y_offset + circle_diameter,
+                start=0,
+                extent=180,  # 180度弧，形成半圆
+                fill=self.highlight_color,
+                outline="",
+                tags="highlight"
+            )
+
+            # 绘制下半圆 - 确保与上半圆完全对齐
+            self.create_arc(
+                x_left,  # 与上半圆使用完全相同的x坐标
+                indicator_y_offset + indicator_height - circle_diameter,
+                circle_diameter*0.75,  # 与上半圆使用完全相同的宽度
+                indicator_y_offset + indicator_height,
+                start=180,
+                extent=180,  # 180度弧，形成半圆
+                fill=self.highlight_color,
+                outline="",
+                tags="highlight"
+            )
+
+            # 绘制文本
+        self.text_id = self.create_text(
+            width // 2,
+            height // 2,
+            text=self.text,
+            fill=self.fg,
+            font=font_style,
+            anchor="center",
+            tags="text"
+        )
+
+    def set_active(self, active):
+        """设置按钮是否处于激活状态"""
+        self.active = active
+        self._draw_button("active" if active else "normal")
+
+    def _on_press(self, event):
+        """按下按钮事件处理"""
+        # 执行命令
         if self.command:
             self.command()
 
-    def set_active(self, active):
-        """设置按钮的活动状态"""
-        if self.is_active != active:
-            self.is_active = active
-            self._draw_button()
+    def _on_release(self, event):
+        """释放按钮事件处理"""
+        pass
+
+    def _on_enter(self, event):
+        """鼠标进入事件处理"""
+        # 如果不是激活状态，显示悬停效果
+        if not self.active:
+            self._draw_button("hover")
+
+    def _on_leave(self, event):
+        """鼠标离开事件处理"""
+        # 恢复正常或激活状态
+        self._draw_button("active" if self.active else "normal")
 
 class ModernFrame(ttk.Frame):
     """现代风格框架"""

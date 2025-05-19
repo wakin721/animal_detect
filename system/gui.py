@@ -65,7 +65,7 @@ class ObjectDetectionGUI:
         self._apply_system_theme()
 
         # 设置窗口尺寸和位置
-        width, height = 900, 700  # 增加窗口宽度以适应侧边栏
+        width, height = 1050, 700  # 增加窗口宽度以适应侧边栏
         screen_width = master.winfo_screenwidth()
         screen_height = master.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -263,14 +263,15 @@ class ObjectDetectionGUI:
         self._show_page(self.current_page)
 
     def _setup_styles(self):
-        """设置自定义样式"""
+        """设置自定义样式 - 支持圆角矩形高亮边框效果"""
         style = ttk.Style()
 
         # 使用系统强调色作为侧边栏颜色
         if not hasattr(self, 'accent_color'):
             self.accent_color = "#0078d7"  # 默认值
 
-        sidebar_bg = self.accent_color  # 使用系统强调色作为侧边栏背景
+        # 使用系统强调色作为侧边栏背景
+        sidebar_bg = self.accent_color
 
         # 计算适合的文字颜色 (根据背景色亮度)
         # 将十六进制颜色转换为RGB
@@ -284,67 +285,48 @@ class ObjectDetectionGUI:
         # 亮度高于128使用黑色文字，否则使用白色文字
         sidebar_fg = "#000000" if brightness > 128 else "#ffffff"
 
-        # 计算更深/更浅的背景色用于悬停和选中效果
-        # 如果背景色较亮，为了悬停效果更明显，使其变暗
-        # 如果背景色较暗，则使其变亮
-        if brightness > 128:
-            # 使颜色变暗
-            factor = 0.8
-            r_hover = max(0, int(r * factor))
-            g_hover = max(0, int(g * factor))
-            b_hover = max(0, int(b * factor))
+        # 计算更深/更浅的背景色以及高亮颜色
+        if brightness < 128:  # 深色背景
+            # 变亮
+            hover_color = f"#{min(255, int(r * 1.3)):02x}{min(255, int(g * 1.3)):02x}{min(255, int(b * 1.3)):02x}"
+            active_color = f"#{min(255, int(r * 1.5)):02x}{min(255, int(g * 1.5)):02x}{min(255, int(b * 1.5)):02x}"
 
-            # 使选中色更暗
-            factor_selected = 0.7
-            r_selected = max(0, int(r * factor_selected))
-            g_selected = max(0, int(g * factor_selected))
-            b_selected = max(0, int(b * factor_selected))
+            # 高亮颜色 - 对于深色背景，使用明亮的颜色作为高亮
+            # 使用较亮的主题色或白色
+            r_highlight = min(255, int(r * 2.0))
+            g_highlight = min(255, int(g * 2.0))
+            b_highlight = min(255, int(b * 2.0))
+            highlight_color = f"#{r_highlight:02x}{g_highlight:02x}{b_highlight:02x}"
+
+            # 如果仍然太暗，使用白色
+            brightness_highlight = (r_highlight * 299 + g_highlight * 587 + b_highlight * 114) / 1000
+            if brightness_highlight < 160:
+                highlight_color = "#ffffff"
         else:
-            # 使颜色变亮
-            factor = 1.2
-            r_hover = min(255, int(r * factor))
-            g_hover = min(255, int(g * factor))
-            b_hover = min(255, int(b * factor))
+            # 变暗
+            hover_color = f"#{max(0, int(r * 0.9)):02x}{max(0, int(g * 0.9)):02x}{max(0, int(b * 0.9)):02x}"
+            active_color = f"#{max(0, int(r * 0.8)):02x}{max(0, int(g * 0.8)):02x}{max(0, int(b * 0.8)):02x}"
 
-            # 使选中色更亮
-            factor_selected = 1.3
-            r_selected = min(255, int(r * factor_selected))
-            g_selected = min(255, int(g * factor_selected))
-            b_selected = min(255, int(b * factor_selected))
+            # 高亮颜色 - 对于浅色背景，使用较暗但明显的颜色作为高亮
+            r_highlight = max(0, int(r * 0.6))
+            g_highlight = max(0, int(g * 0.6))
+            b_highlight = max(0, int(b * 0.6))
+            highlight_color = f"#{r_highlight:02x}{g_highlight:02x}{b_highlight:02x}"
 
-        sidebar_hover_bg = f"#{r_hover:02x}{g_hover:02x}{b_hover:02x}"
-        sidebar_selected_bg = f"#{r_selected:02x}{g_selected:02x}{b_selected:02x}"
+            # 确保与背景有足够对比度
+            brightness_highlight = (r_highlight * 299 + g_highlight * 587 + b_highlight * 114) / 1000
+            if abs(brightness - brightness_highlight) < 50:
+                highlight_color = "#005fa1"  # 使用默认深蓝色
+
+        # 保存颜色供后续使用
+        self.sidebar_bg = sidebar_bg
+        self.sidebar_fg = sidebar_fg
+        self.sidebar_hover_bg = hover_color
+        self.sidebar_active_bg = active_color
+        self.highlight_color = highlight_color
 
         # 侧边栏样式
         style.configure("Sidebar.TFrame", background=sidebar_bg)
-
-        # 创建圆角按钮样式 - 由于ttk不直接支持圆角，需要使用Canvas或自定义Frame实现
-        # 这里我们先设置好基本样式，然后在创建按钮时额外处理
-        style.configure("Sidebar.TButton",
-                        font=("Segoe UI", 11),
-                        background=sidebar_bg,
-                        foreground=sidebar_fg,
-                        borderwidth=0,
-                        focusthickness=0,
-                        relief="flat",
-                        padding=(10, 15),
-                        anchor="w")
-
-        # 侧边栏按钮激活/悬停样式
-        style.map("Sidebar.TButton",
-                  background=[("active", sidebar_hover_bg), ("pressed", sidebar_selected_bg)],
-                  foreground=[("active", sidebar_fg), ("pressed", sidebar_fg)])
-
-        # 侧边栏选中按钮样式
-        style.configure("SidebarSelected.TButton",
-                        background=sidebar_selected_bg,
-                        foreground=sidebar_fg,
-                        font=("Segoe UI", 11, "bold"),
-                        borderwidth=0,
-                        focusthickness=0,
-                        relief="flat",
-                        padding=(10, 15),
-                        anchor="w")
 
         # 内容区标题样式
         style.configure("Title.TLabel",
@@ -389,21 +371,13 @@ class ObjectDetectionGUI:
             self.refresh_model_list()
 
     def _create_sidebar(self) -> None:
-        """创建侧边栏菜单"""
+        """创建侧边栏菜单 - 使用左侧高亮指示条风格的按钮"""
         # 使用系统强调色作为侧边栏背景
-        sidebar_bg = self.accent_color if hasattr(self, 'accent_color') else "#0078d7"
+        sidebar_bg = self.sidebar_bg if hasattr(self, 'sidebar_bg') else self.accent_color
+        sidebar_fg = self.sidebar_fg if hasattr(self, 'sidebar_fg') else "#ffffff"
 
-        # 计算适合的文字颜色
-        # 将十六进制颜色转换为RGB
-        r = int(sidebar_bg[1:3], 16)
-        g = int(sidebar_bg[3:5], 16)
-        b = int(sidebar_bg[5:7], 16)
-
-        # 计算亮度
-        brightness = (r * 299 + g * 587 + b * 114) / 1000
-
-        # 亮度高于128使用黑色文字，否则使用白色文字
-        sidebar_fg = "#000000" if brightness > 128 else "#ffffff"
+        # 获取高亮颜色
+        highlight_color = self.highlight_color if hasattr(self, 'highlight_color') else "#ffffff"
 
         # 创建侧边栏框架
         self.sidebar = ttk.Frame(self.master, style="Sidebar.TFrame", width=180)
@@ -455,22 +429,6 @@ class ObjectDetectionGUI:
         buttons_frame = tk.Frame(self.sidebar, bg=sidebar_bg)
         buttons_frame.pack(fill="x", padx=10, pady=5)
 
-        # 计算更深/更浅的背景色用于悬停和选中效果
-        if brightness > 128:
-            # 使颜色变暗
-            factor_selected = 0.7
-            r_selected = max(0, int(r * factor_selected))
-            g_selected = max(0, int(g * factor_selected))
-            b_selected = max(0, int(b * factor_selected))
-        else:
-            # 使颜色变亮
-            factor_selected = 1.3
-            r_selected = min(255, int(r * factor_selected))
-            g_selected = min(255, int(g * factor_selected))
-            b_selected = min(255, int(b * factor_selected))
-
-        sidebar_selected_bg = f"#{r_selected:02x}{g_selected:02x}{b_selected:02x}"
-
         # 创建圆角按钮
         from system.ui_components import RoundedButton
 
@@ -481,9 +439,10 @@ class ObjectDetectionGUI:
                 command=lambda p=page_id: self._show_page(p),
                 bg=sidebar_bg,
                 fg=sidebar_fg,
-                width=160,
-                height=40,
-                radius=15  # 圆角半径
+                width=160,  # 按钮宽度
+                height=40,  # 按钮高度
+                radius=10,  # 圆角半径
+                highlight_color=highlight_color  # 传递高亮颜色参数
             )
             button.pack(fill="x", pady=3)
             self.nav_buttons[page_id] = button
@@ -970,35 +929,29 @@ class ObjectDetectionGUI:
         self._refresh_model_list()
 
     def _create_env_maintenance_content(self) -> None:
-        """创建环境维护标签页内容 - 修复空白区域问题"""
-        # 确保清除可能的旧内容
+        """创建环境维护标签页内容 - 修复版本"""
+        # 清除旧内容
         for widget in self.env_maintenance_tab.winfo_children():
             widget.destroy()
 
-        # 创建框架来容纳所有内容
-        main_frame = ttk.Frame(self.env_maintenance_tab)
-        main_frame.pack(fill="both", expand=True)
+        # 创建滚动视图容器
+        self.env_scrollable = ttk.Frame(self.env_maintenance_tab)
+        self.env_scrollable.pack(fill="both", expand=True)
 
-        # 创建一个Canvas作为滚动容器
-        self.env_canvas = tk.Canvas(main_frame, highlightthickness=0)
+        # 创建Canvas和滚动条
+        self.env_canvas = tk.Canvas(self.env_scrollable, highlightthickness=0)
         self.env_canvas.pack(side="left", fill="both", expand=True)
 
-        # 添加垂直滚动条
-        env_scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.env_canvas.yview)
-        env_scrollbar.pack(side="right", fill="y")
-        self.env_canvas.configure(yscrollcommand=env_scrollbar.set)
+        self.env_scrollbar = ttk.Scrollbar(self.env_scrollable, orient="vertical", command=self.env_canvas.yview)
+        self.env_scrollbar.pack(side="right", fill="y")
+        self.env_canvas.configure(yscrollcommand=self.env_scrollbar.set)
 
-        # 主内容框架 - 所有面板将放在此框架内
+        # 创建内容框架 - 确保始终在顶部
         self.env_content_frame = ttk.Frame(self.env_canvas)
-
-        # 在Canvas上创建一个窗口来显示内容框架
         self.env_canvas_window = self.env_canvas.create_window(
-            (0, 0),
+            (0, 0),  # 关键是这里的坐标要确保是(0, 0)
             window=self.env_content_frame,
-            anchor="nw",
-            tags="self.env_content_frame",
-            width=self.env_canvas.winfo_width()  # 确保宽度正确
-        )
+            anchor="nw" ) # 始终固定在左上角
 
         # 确保系统变量已初始化
         if not hasattr(self, 'is_dark_mode'):
@@ -1008,7 +961,7 @@ class ObjectDetectionGUI:
         self.pytorch_panel = CollapsiblePanel(
             self.env_content_frame,
             "安装 PyTorch",
-            subtitle="安装 PyTorchs",
+            subtitle="安装 PyTorch",
             icon="📦"
         )
         self.pytorch_panel.pack(fill="x", expand=False, pady=(0, 1))
@@ -1207,64 +1160,123 @@ class ObjectDetectionGUI:
         # 初始检查PyTorch安装状态
         self._check_pytorch_status()
 
-        # 修复滚动问题
-        self.env_content_frame.update_idletasks()
-        self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
-
-        # 绑定事件以处理滚动和调整大小
+        # 配置滚动
         self._configure_env_scrolling()
 
-    def _configure_env_scrolling(self):
-        """配置环境维护标签页的滚动功能"""
+        # 额外确保初始化完成后内容在顶部
+        self.master.after(100, lambda: self.env_canvas.yview_moveto(0.0))
 
-        # 更新滚动区域大小
+    def _configure_env_scrolling(self):
+        """配置环境维护标签页的滚动功能 - 完全修复顶部空白问题"""
+
+        # 更新滚动区域尺寸
         def _update_scrollregion(event=None):
             self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
 
-        # 确保当窗口调整大小时，canvas窗口宽度跟随调整
+        # 当Canvas大小改变时，调整窗口宽度
         def _configure_canvas(event):
-            self.env_canvas.itemconfig(self.env_canvas_window, width=event.width)
+            # 设置内容框架宽度与Canvas相同
+            canvas_width = event.width
+            self.env_canvas.itemconfigure(self.env_canvas_window, width=canvas_width)
 
-        # 设置鼠标滚轮事件
+        # 处理鼠标滚轮事件 - 关键改进部分
         def _on_mousewheel(event):
-            # Windows上用event.delta, Linux/macOS上用event.num和event.delta
-            if event.num == 4 or event.delta > 0:  # 向上滚动
-                self.env_canvas.yview_scroll(-1, "units")
-            elif event.num == 5 or event.delta < 0:  # 向下滚动
-                self.env_canvas.yview_scroll(1, "units")
+            # 获取当前Canvas视图
+            view_pos = self.env_canvas.yview()
 
-        # 绑定事件
+            # 计算滚动方向和单位
+            if platform.system() == "Windows":
+                delta = -1 if event.delta > 0 else 1
+            elif platform.system() == "Darwin":  # macOS
+                delta = -1 if event.delta > 0 else 1
+            elif hasattr(event, 'num'):
+                delta = -1 if event.num == 4 else 1
+            else:
+                return  # 未知事件类型，不处理
+
+            # 如果是向上滚动且已经接近顶部，直接滚到顶部
+            if delta < 0 and view_pos[0] < 0.1:
+                self.env_canvas.yview_moveto(0)
+            else:
+                self.env_canvas.yview_scroll(delta, "units")
+
+            # 防止滚过头 - 始终检查并修正顶部位置
+            if self.env_canvas.yview()[0] < 0.001:  # 非常接近顶部但不是0
+                self.env_canvas.yview_moveto(0)  # 强制设置为顶部
+
+            # 阻止事件继续传播，避免页面跳动
+            return "break"
+
+        # 绑定滚动事件到Canvas
+        self.env_canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows
+        self.env_canvas.bind("<Button-4>", _on_mousewheel)  # Linux向上滚动
+        self.env_canvas.bind("<Button-5>", _on_mousewheel)  # Linux向下滚动
+
+        # 配置基础事件
         self.env_content_frame.bind("<Configure>", _update_scrollregion)
         self.env_canvas.bind("<Configure>", _configure_canvas)
 
-        # 根据不同平台绑定滚轮事件
-        import platform
+        # 重要：添加特殊处理确保滚动条位置正确
+        def _on_scrollbar_scroll(*args):
+            # 如果滚动条正在移向顶部位置，确保完全到顶
+            if float(args[1]) <= 0.001:
+                self.master.after(10, lambda: self.env_canvas.yview_moveto(0))
 
-        if platform.system() == "Windows":
-            self.env_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        else:  # Linux和macOS
-            self.env_canvas.bind_all("<Button-4>", _on_mousewheel)
-            self.env_canvas.bind_all("<Button-5>", _on_mousewheel)
+        # 直接监听滚动条的移动
+        self.env_scrollbar.configure(command=lambda *args: [
+            self.env_canvas.yview(*args),  # 原始滚动行为
+            _on_scrollbar_scroll(*args)  # 额外处理
+        ])
 
-        # 为折叠面板添加回调，以便在展开/折叠时更新滚动区域
-        # 修改CollapsiblePanel的展开和折叠方法
-        original_expand = self.pytorch_panel.expand
-        original_collapse = self.pytorch_panel.collapse
+        # 添加进入和离开Canvas的事件处理 - 改进的全局滚动处理
+        def _on_enter(event):
+            # 绑定全局滚轮事件
+            if platform.system() == "Windows":
+                self.master.bind_all("<MouseWheel>", _on_mousewheel)
+            else:  # Linux和macOS
+                self.master.bind_all("<Button-4>", _on_mousewheel)
+                self.master.bind_all("<Button-5>", _on_mousewheel)
 
-        def expand_with_update(self):
-            original_expand(self)
-            _update_scrollregion()
+        def _on_leave(event):
+            # 解绑全局滚轮事件
+            if platform.system() == "Windows":
+                self.master.unbind_all("<MouseWheel>")
+            else:  # Linux和macOS
+                self.master.unbind_all("<Button-4>")
+                self.master.unbind_all("<Button-5>")
 
-        def collapse_with_update(self):
-            original_collapse(self)
-            _update_scrollregion()
+        self.env_canvas.bind("<Enter>", _on_enter)
+        self.env_canvas.bind("<Leave>", _on_leave)
 
-        # 替换方法
-        for panel in [self.pytorch_panel, self.model_panel, self.python_panel]:
-            panel.original_expand = panel.expand
-            panel.original_collapse = panel.collapse
-            panel.expand = lambda p=panel: (p.original_expand(), _update_scrollregion())
-            panel.collapse = lambda p=panel: (p.original_collapse(), _update_scrollregion())
+        # 强制初始滚动位置为顶部
+        self.env_content_frame.update_idletasks()
+        self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
+        self.env_canvas.yview_moveto(0.0)
+
+    def _on_panel_toggle(self, panel, is_expanded):
+        """处理面板展开/折叠事件 - 完全防止顶部空白"""
+        # 记录当前滚动位置
+        current_pos = self.env_canvas.yview()
+        was_at_top = current_pos[0] <= 0.001
+
+        # 允许面板重新计算其尺寸
+        self.env_content_frame.update_idletasks()
+
+        # 重新配置滚动区域
+        self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
+
+        # 如果之前在顶部，则保持在顶部
+        if was_at_top:
+            self.env_canvas.yview_moveto(0.0)
+
+        # 强制检查一次顶部空白
+        self.master.after(50, self._force_check_top)
+
+    def _force_check_top(self):
+        """强制检查并修复顶部空白"""
+        current_pos = self.env_canvas.yview()
+        if 0 < current_pos[0] < 0.01:  # 非常接近顶部但不是0
+            self.env_canvas.yview_moveto(0.0)
 
     def _toggle_card(self, card_id: str) -> None:
         """切换折叠卡片的展开/收起状态"""
