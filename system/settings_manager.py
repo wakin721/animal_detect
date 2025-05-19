@@ -134,3 +134,21 @@ class SettingsManager:
             是否存在缓存文件
         """
         return os.path.exists(self.cache_file)
+
+    def get_setting(self, key: str, default=None):
+        """获取单个设置项的值
+
+        Args:
+            key: 设置项键名
+            default: 如果设置项不存在时返回的默认值
+
+        Returns:
+            设置项值，如果不存在则返回默认值
+        """
+        # 加载设置
+        settings = self.load_settings()
+
+        # 如果设置存在，返回对应值，否则返回默认值
+        if settings and key in settings:
+            return settings[key]
+        return default

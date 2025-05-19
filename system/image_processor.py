@@ -287,3 +287,22 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"保存检测结果JSON失败: {e}")
             return ""
+
+    def load_model(self, model_path: str) -> None:
+        """加载新的模型
+
+        Args:
+            model_path: 模型文件路径
+        """
+        try:
+            # 导入YOLO
+            from ultralytics import YOLO
+
+            # 加载模型
+            self.model = YOLO(model_path)
+            self.model_path = model_path
+            logger.info(f"模型已加载: {model_path}")
+
+        except Exception as e:
+            logger.error(f"加载模型失败: {e}")
+            raise Exception(f"加载模型失败: {e}")

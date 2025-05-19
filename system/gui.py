@@ -29,6 +29,7 @@ from system.metadata_extractor import ImageMetadataExtractor
 from system.data_processor import DataProcessor
 from system.ui_components import ModernFrame, InfoBar, SpeedProgressBar
 from system.settings_manager import SettingsManager
+from system.ui_components import CollapsiblePanel
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,8 @@ class ObjectDetectionGUI:
         # 初始化模型
         model_path = resource_path(os.path.join("res", "predict.pt"))
         self.image_processor = ImageProcessor(model_path)
+        # 保存当前使用的模型路径和名称
+        self.image_processor.model_path = model_path
 
         # 状态变量
         self.is_processing = False
@@ -381,6 +384,10 @@ class ObjectDetectionGUI:
         self.status_bar = InfoBar(self.master)
         self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
 
+        # 初始化模型列表（如果高级页面已创建）
+        if hasattr(self, 'model_listbox'):
+            self.refresh_model_list()
+
     def _create_sidebar(self) -> None:
         """创建侧边栏菜单"""
         # 使用系统强调色作为侧边栏背景
@@ -618,11 +625,11 @@ class ObjectDetectionGUI:
         # 开始处理按钮
         self.start_stop_button = ttk.Button(
             process_frame,
-            text="开始处理",
+            text="▶ 开始处理",
             command=self.toggle_processing_state,
             style="Process.TButton",
             width=15)
-        self.start_stop_button.pack(side="right")
+        self.start_stop_button.pack(side="right", pady=0)
 
     def _create_preview_page(self) -> None:
         """创建图像预览页面"""
@@ -686,7 +693,7 @@ class ObjectDetectionGUI:
         self.detect_button.pack(side="right")
 
     def _create_advanced_page(self) -> None:
-        """创建高级设置页面"""
+        """创建高级设置页面，使用标签页分隔功能"""
         self.advanced_page = ttk.Frame(self.content_frame)
 
         # 页面标题
@@ -696,9 +703,59 @@ class ObjectDetectionGUI:
         title = ttk.Label(title_frame, text="高级设置", style="Title.TLabel")
         title.pack(side="left")
 
+        # 创建标签页控件
+        self.advanced_notebook = ttk.Notebook(self.advanced_page)
+        self.advanced_notebook.pack(fill="both", expand=True, padx=20, pady=10)
+
+        # 创建模型参数设置标签页
+        self.model_params_tab = ttk.Frame(self.advanced_notebook)
+        self.advanced_notebook.add(self.model_params_tab, text="模型参数设置")
+
+        # 创建环境维护标签页
+        self.env_maintenance_tab = ttk.Frame(self.advanced_notebook)
+        self.advanced_notebook.add(self.env_maintenance_tab, text="环境维护")
+
+        # 绑定标签页切换事件
+        self.advanced_notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        # 填充模型参数设置标签页内容
+        self._create_model_params_content()
+
+        # 填充环境维护标签页内容
+        self._create_env_maintenance_content()
+
+        # 按钮区域 (共享区域，位于标签页下方)
+        buttons_frame = ttk.Frame(self.advanced_page)
+        buttons_frame.pack(fill="x", padx=20, pady=10)
+
+        # 查看参数说明按钮
+        help_button = ttk.Button(
+            buttons_frame, text="查看参数说明", command=self.show_params_help, width=12)
+        help_button.pack(side="left")
+
+        # 恢复默认参数按钮
+        reset_button = ttk.Button(
+            buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=12)
+        reset_button.pack(side="right")
+
+        # 确保在初始化后面板能正确显示
+        self.advanced_notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        # 初次显示页面时，确保环境维护标签页内容正确加载
+        self.master.after(500, lambda: self._ensure_env_maintenance_visible())
+
+    def _ensure_env_maintenance_visible(self):
+        """确保环境维护标签页在初始加载时内容可见"""
+        if hasattr(self, 'env_content_frame') and hasattr(self, 'env_canvas'):
+            self.env_content_frame.update_idletasks()
+            self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
+
+
+    def _create_model_params_content(self) -> None:
+        """创建模型参数设置标签页内容"""
         # 模型参数设置
-        params_frame = ttk.LabelFrame(self.advanced_page, text="模型参数设置")
-        params_frame.pack(fill="x", padx=20, pady=10)
+        params_frame = ttk.LabelFrame(self.model_params_tab, text="模型参数设置")
+        params_frame.pack(fill="x", pady=10)
 
         # 参数内容框架
         params_content = ttk.Frame(params_frame)
@@ -738,8 +795,8 @@ class ObjectDetectionGUI:
         self.conf_label.pack(side="right", padx=(10, 0))
 
         # 模型优化选项
-        options_frame = ttk.LabelFrame(self.advanced_page, text="模型优化选项")
-        options_frame.pack(fill="x", padx=20, pady=10)
+        options_frame = ttk.LabelFrame(self.model_params_tab, text="模型优化选项")
+        options_frame.pack(fill="x", pady=10)
 
         options_content = ttk.Frame(options_frame)
         options_content.pack(fill="x", padx=10, pady=10)
@@ -794,19 +851,906 @@ class ObjectDetectionGUI:
             foreground="gray")
         agnostic_nms_desc.pack(anchor="w", padx=25, pady=(0, 5))
 
-        # 按钮区域
-        buttons_frame = ttk.Frame(self.advanced_page)
-        buttons_frame.pack(fill="x", padx=20, pady=10)
+    def _create_model_selection_card(self, parent) -> None:
+        """创建模型选择折叠卡片 - 与PyTorch安装卡片风格一致"""
+        # 创建折叠卡片框架
+        card_frame = ttk.Frame(parent)
+        card_frame.pack(fill="x", pady=5)
 
-        # 查看参数说明按钮
-        help_button = ttk.Button(
-            buttons_frame, text="查看参数说明", command=self.show_params_help, width=12)
-        help_button.pack(side="left")
+        # 创建标题栏
+        header_frame = ttk.Frame(card_frame)
+        header_frame.pack(fill="x")
 
-        # 恢复默认参数按钮
-        reset_button = ttk.Button(
-            buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=12)
-        reset_button.pack(side="right")
+        # 使用系统强调色的变体作为卡片标题背景
+        if hasattr(self, 'accent_color'):
+            r = int(self.accent_color[1:3], 16)
+            g = int(self.accent_color[3:5], 16)
+            b = int(self.accent_color[5:7], 16)
+
+            # 计算亮度
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+
+            # 根据亮度选择文字颜色
+            text_color = "#000000" if brightness > 128 else "#ffffff"
+
+            # 创建标题标签
+            header_style = ttk.Style()
+            header_style.configure("CardHeader.TLabel",
+                                   background=self.accent_color,
+                                   foreground=text_color,
+                                   font=("Segoe UI", 11, "bold"),
+                                   padding=(10, 5))
+
+            header = ttk.Label(header_frame, text="模型选择", style="CardHeader.TLabel")
+        else:
+            header = ttk.Label(header_frame, text="模型选择", font=("Segoe UI", 11, "bold"))
+
+        header.pack(side="left", fill="x", expand=True)
+
+        # 添加展开/折叠按钮
+        self.model_expanded = tk.BooleanVar(value=False)  # 默认折叠
+        toggle_btn = ttk.Button(header_frame, text="▼", width=3,
+                                command=lambda: self._toggle_card("model"))
+        toggle_btn.pack(side="right", padx=5)
+
+        # 添加内容区域
+        content_frame = ttk.Frame(card_frame, padding=(15, 10))
+        content_frame.pack(fill="x", expand=True)
+
+        # 初始隐藏内容
+        content_frame.pack_forget()
+
+        # 存储卡片信息
+        self.advanced_cards["model"] = {
+            "content": content_frame,
+            "toggle_btn": toggle_btn,
+            "expanded": self.model_expanded
+        }
+
+        # 显示当前模型
+        current_model_frame = ttk.Frame(content_frame)
+        current_model_frame.pack(fill="x", pady=5)
+
+        ttk.Label(current_model_frame, text="当前模型:").pack(side="left", padx=(0, 10))
+
+        current_model_name = os.path.basename(self.image_processor.model_path) if hasattr(self.image_processor,
+                                                                                          'model_path') else "未知"
+        self.current_model_var = tk.StringVar(value=current_model_name)
+        current_model_label = ttk.Label(current_model_frame, textvariable=self.current_model_var,
+                                        font=("Segoe UI", 9, "bold"))
+        current_model_label.pack(side="left")
+
+        # 添加模型选择
+        model_select_frame = ttk.Frame(content_frame)
+        model_select_frame.pack(fill="x", pady=(10, 5))
+
+        ttk.Label(model_select_frame, text="选择模型:").pack(side="left", padx=(0, 10))
+
+        # 创建模型下拉菜单
+        self.model_selection_var = tk.StringVar()
+        self.model_combobox = ttk.Combobox(
+            model_select_frame,
+            textvariable=self.model_selection_var,
+            state="readonly",
+            width=30
+        )
+        self.model_combobox.pack(side="left", padx=(0, 5), fill="x", expand=True)
+
+        # 刷新按钮
+        refresh_btn = ttk.Button(
+            model_select_frame,
+            text="刷新",
+            command=self._refresh_model_list,
+            width=6
+        )
+        refresh_btn.pack(side="left")
+
+        # 添加加载按钮
+        load_frame = ttk.Frame(content_frame)
+        load_frame.pack(fill="x", pady=(10, 5))
+
+        self.load_model_btn = ttk.Button(
+            load_frame,
+            text="加载选中模型",
+            command=self._apply_selected_model,
+            width=15
+        )
+        self.load_model_btn.pack(side="right")
+
+        # 模型状态框架
+        status_frame = ttk.Frame(content_frame)
+        status_frame.pack(fill="x", pady=(10, 0))
+
+        ttk.Label(status_frame, text="状态:").pack(side="left", padx=(0, 5))
+
+        self.model_status_var = tk.StringVar(value="就绪")
+        model_status = ttk.Label(status_frame, textvariable=self.model_status_var)
+        model_status.pack(side="left")
+
+        # 初始化加载模型列表
+        self._refresh_model_list()
+
+    def _create_env_maintenance_content(self) -> None:
+        """创建环境维护标签页内容 - 简化版本"""
+        # 清除旧内容
+        for widget in self.env_maintenance_tab.winfo_children():
+            widget.destroy()
+
+        # 创建滚动视图容器
+        self.env_scrollable = ttk.Frame(self.env_maintenance_tab)
+        self.env_scrollable.pack(fill="both", expand=True)
+
+        # 创建Canvas和滚动条
+        self.env_canvas = tk.Canvas(self.env_scrollable, highlightthickness=0)
+        self.env_canvas.pack(side="left", fill="both", expand=True)
+
+        self.env_scrollbar = ttk.Scrollbar(self.env_scrollable, orient="vertical", command=self.env_canvas.yview)
+        self.env_scrollbar.pack(side="right", fill="y")
+        self.env_canvas.configure(yscrollcommand=self.env_scrollbar.set)
+
+        # 创建内容框架
+        self.env_content_frame = ttk.Frame(self.env_canvas)
+        self.env_canvas_window = self.env_canvas.create_window(
+            (0, 0),
+            window=self.env_content_frame,
+            anchor="nw",
+            width=self.env_canvas.winfo_reqwidth()
+        )
+
+        # 确保系统变量已初始化
+        if not hasattr(self, 'is_dark_mode'):
+            self.is_dark_mode = False
+
+        # 创建PyTorch安装面板
+        self.pytorch_panel = CollapsiblePanel(
+            self.env_content_frame,
+            "安装 PyTorch",
+            subtitle="安装 PyTorch 与 xFormers",
+            icon="📦"
+        )
+        self.pytorch_panel.pack(fill="x", expand=False)
+
+        # 版本选择下拉框
+        version_frame = ttk.Frame(self.pytorch_panel.content_padding)
+        version_frame.pack(fill="x", pady=5)
+
+        version_label = ttk.Label(version_frame, text="选择版本")
+        version_label.pack(side="top", anchor="w", pady=(0, 5))
+
+        # PyTorch版本选择下拉框
+        self.pytorch_version_var = tk.StringVar()
+        versions = [
+            "2.7.0 (CUDA 12.8)",
+            "2.7.0 (CUDA 12.6)",
+            "2.7.0 (CUDA 11.8)",
+            "2.7.0 (CPU Only)",
+        ]
+
+        # 设置下拉框样式
+        style = ttk.Style()
+        style.configure("Dropdown.TCombobox", padding=(10, 5))
+
+        version_combo = ttk.Combobox(
+            version_frame,
+            textvariable=self.pytorch_version_var,
+            values=versions,
+            state="readonly",
+            style="Dropdown.TCombobox"
+        )
+        version_combo.pack(fill="x", expand=True)
+        version_combo.current(0)  # 默认选择第一项
+
+        # 仅安装必要组件选项
+        options_frame = ttk.Frame(self.pytorch_panel.content_padding)
+        options_frame.pack(fill="x", pady=10)
+
+        self.minimal_install_var = tk.BooleanVar(value=False)
+        minimal_switch = ttk.Checkbutton(
+            options_frame,
+            text="仅安装基础组件",
+            variable=self.minimal_install_var
+        )
+        minimal_switch.pack(anchor="w")
+
+        # 安装按钮和状态显示
+        bottom_frame = ttk.Frame(self.pytorch_panel.content_padding)
+        bottom_frame.pack(fill="x", pady=(10, 0))
+
+        self.pytorch_status_var = tk.StringVar(value="")
+        status_label = ttk.Label(bottom_frame, textvariable=self.pytorch_status_var)
+        status_label.pack(side="left")
+
+        self.install_button = ttk.Button(
+            bottom_frame,
+            text="安装",
+            command=self._install_pytorch,
+            style="Action.TButton"
+        )
+        style.configure("Action.TButton", font=("Segoe UI", 9))
+        self.install_button.pack(side="right")
+
+        # 创建模型管理面板
+        self.model_panel = CollapsiblePanel(
+            self.env_content_frame,
+            "模型管理",
+            subtitle="管理用于识别的模型",
+            icon="🔧"
+        )
+        self.model_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # 添加模型列表和选择功能
+        model_selection_frame = ttk.Frame(self.model_panel.content_padding)
+        model_selection_frame.pack(fill="x", pady=5)
+
+        model_label = ttk.Label(model_selection_frame, text="当前使用的模型")
+        model_label.pack(anchor="w", pady=(0, 5))
+
+        # 当前模型显示
+        model_name = os.path.basename(self.image_processor.model_path) if hasattr(self.image_processor,
+                                                                                  'model_path') else "未知"
+        self.current_model_var = tk.StringVar(value=model_name)
+
+        # 设置只读输入框样式
+        style.configure("ReadOnly.TEntry", fieldbackground="#f0f0f0" if not self.is_dark_mode else "#3a3a3a")
+
+        current_model_entry = ttk.Entry(
+            model_selection_frame,
+            textvariable=self.current_model_var,
+            state="readonly",
+            style="ReadOnly.TEntry"
+        )
+        current_model_entry.pack(fill="x", expand=True, pady=(0, 10))
+
+        # 模型选择
+        model_select_label = ttk.Label(model_selection_frame, text="选择可用模型")
+        model_select_label.pack(anchor="w", pady=(0, 5))
+
+        # 模型下拉框
+        self.model_selection_var = tk.StringVar()
+        self.model_combobox = ttk.Combobox(
+            model_selection_frame,
+            textvariable=self.model_selection_var,
+            state="readonly",
+            style="Dropdown.TCombobox"
+        )
+        self.model_combobox.pack(fill="x", expand=True)
+
+        # 模型操作按钮
+        model_buttons_frame = ttk.Frame(self.model_panel.content_padding)
+        model_buttons_frame.pack(fill="x", pady=10)
+
+        self.model_status_var = tk.StringVar(value="")
+        model_status = ttk.Label(model_buttons_frame, textvariable=self.model_status_var)
+        model_status.pack(side="left")
+
+        # 添加刷新按钮
+        refresh_btn = ttk.Button(
+            model_buttons_frame,
+            text="刷新列表",
+            command=self._refresh_model_list,
+            style="Secondary.TButton"
+        )
+        style.configure("Secondary.TButton", font=("Segoe UI", 9))
+        refresh_btn.pack(side="right", padx=(0, 5))
+
+        # 添加应用按钮
+        apply_btn = ttk.Button(
+            model_buttons_frame,
+            text="应用模型",
+            command=self._apply_selected_model,
+            style="Action.TButton"
+        )
+        apply_btn.pack(side="right")
+
+        # 创建Python组件管理面板
+        self.python_panel = CollapsiblePanel(
+            self.env_content_frame,
+            "重装单个 Python 组件",
+            subtitle="重新安装单个 Pip 软件包",
+            icon="🐍"
+        )
+        self.python_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # 添加组件安装内容
+        package_frame = ttk.Frame(self.python_panel.content_padding)
+        package_frame.pack(fill="x", pady=5)
+
+        package_label = ttk.Label(package_frame, text="输入包名称")
+        package_label.pack(anchor="w", pady=(0, 5))
+
+        self.package_var = tk.StringVar()
+        package_entry = ttk.Entry(package_frame, textvariable=self.package_var)
+        package_entry.pack(fill="x", expand=True)
+
+        # 版本约束选项
+        version_constraint_frame = ttk.Frame(self.python_panel.content_padding)
+        version_constraint_frame.pack(fill="x", pady=10)
+
+        version_label = ttk.Label(version_constraint_frame, text="版本约束 (可选)")
+        version_label.pack(anchor="w", pady=(0, 5))
+
+        self.version_constraint_var = tk.StringVar()
+        version_entry = ttk.Entry(version_constraint_frame, textvariable=self.version_constraint_var)
+        version_entry.pack(fill="x", expand=True)
+
+        # 示例提示
+        example_label = ttk.Label(
+            version_constraint_frame,
+            text="示例: ==1.0.0, >=2.0.0, <3.0.0",
+            font=("Segoe UI", 8),
+            foreground="#888888"
+        )
+        example_label.pack(anchor="w", pady=(2, 0))
+
+        # 安装按钮
+        package_buttons_frame = ttk.Frame(self.python_panel.content_padding)
+        package_buttons_frame.pack(fill="x", pady=(10, 0))
+
+        self.package_status_var = tk.StringVar(value="")
+        package_status = ttk.Label(package_buttons_frame, textvariable=self.package_status_var)
+        package_status.pack(side="left")
+
+        install_package_btn = ttk.Button(
+            package_buttons_frame,
+            text="安装",
+            command=self._install_python_package,
+            style="Action.TButton"
+        )
+        install_package_btn.pack(side="right")
+
+        # 初始化刷新模型列表
+        self._refresh_model_list()
+
+        # 初始检查PyTorch安装状态
+        self._check_pytorch_status()
+
+        # 设置面板折叠/展开事件处理
+        for panel in [self.pytorch_panel, self.model_panel, self.python_panel]:
+            panel.bind_toggle_callback(self._on_panel_toggle)
+
+        # 配置滚动
+        self._configure_env_scrolling()
+
+        # 初始化显示
+        self._refresh_model_list()
+        self._check_pytorch_status()
+
+    def _bind_scrollwheel(self):
+        """绑定鼠标滚轮事件"""
+
+        def _on_mousewheel(event):
+            # 根据不同平台处理鼠标滚轮事件
+            if event.state & 0x4:  # 在 Windows/Linux 上的 Control 键
+                # 按住 Ctrl 滚动速度更快
+                delta = 3
+            else:
+                delta = 1
+
+            # 计算滚动方向和距离
+            if platform.system() == "Windows":
+                scroll_direction = -1 if event.delta > 0 else 1
+            elif platform.system() == "Darwin":  # macOS
+                scroll_direction = -1 if event.delta > 0 else 1
+            else:  # Linux
+                if event.num == 4:
+                    scroll_direction = -1
+                elif event.num == 5:
+                    scroll_direction = 1
+                else:
+                    scroll_direction = 0
+
+            # 移动所有可见内容，模拟滚动效果
+            y_move = scroll_direction * delta * 20  # 调整滚动速度
+            for widget in self.env_content_frame.winfo_children():
+                widget.place(y=widget.winfo_y() - y_move)
+
+            # 防止过度滚动导致顶部空白
+            self._ensure_no_empty_space()
+
+        # 根据不同平台绑定滚轮事件
+        if platform.system() == "Windows":
+            self.env_content_frame.bind_all("<MouseWheel>", _on_mousewheel)
+        elif platform.system() == "Darwin":  # macOS
+            self.env_content_frame.bind_all("<MouseWheel>", _on_mousewheel)
+        else:  # Linux
+            self.env_content_frame.bind_all("<Button-4>", _on_mousewheel)
+            self.env_content_frame.bind_all("<Button-5>", _on_mousewheel)
+
+    def _configure_env_scrolling(self):
+        """配置环境维护标签页的滚动功能 - 简化版本"""
+
+        # 更新滚动区域尺寸
+        def _update_scrollregion(event=None):
+            self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
+
+        # 当Canvas大小改变时，调整窗口宽度
+        def _configure_canvas(event):
+            # 设置内容框架宽度与Canvas相同
+            canvas_width = event.width
+            self.env_canvas.itemconfigure(self.env_canvas_window, width=canvas_width)
+
+        # 处理面板展开/折叠事件
+        def _on_panel_toggle(panel, is_expanded):
+            # 更新滚动区域
+            self.env_content_frame.update_idletasks()
+            _update_scrollregion()
+
+        # 处理鼠标滚轮事件
+        def _on_mousewheel(event):
+            # 检查鼠标是否在canvas上
+            x, y = self.env_canvas.winfo_pointerxy()
+            canvas_x = self.env_canvas.winfo_rootx()
+            canvas_y = self.env_canvas.winfo_rooty()
+            canvas_width = self.env_canvas.winfo_width()
+            canvas_height = self.env_canvas.winfo_height()
+
+            if (x >= canvas_x and x <= canvas_x + canvas_width and
+                    y >= canvas_y and y <= canvas_y + canvas_height):
+
+                # Windows系统
+                if hasattr(event, 'delta'):
+                    self.env_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                # Linux系统
+                elif hasattr(event, 'num'):
+                    if event.num == 4:  # 向上滚动
+                        self.env_canvas.yview_scroll(-1, "units")
+                    elif event.num == 5:  # 向下滚动
+                        self.env_canvas.yview_scroll(1, "units")
+
+        # 绑定事件
+        self.env_content_frame.bind("<Configure>", _update_scrollregion)
+        self.env_canvas.bind("<Configure>", _configure_canvas)
+
+        # 绑定面板切换事件
+        for panel in [self.pytorch_panel, self.model_panel, self.python_panel]:
+            panel.bind_toggle_callback(_on_panel_toggle)
+
+        # 绑定鼠标滚轮事件，根据不同平台
+        import platform
+        if platform.system() == "Windows":
+            self.env_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        else:  # Linux和macOS
+            self.env_canvas.bind_all("<Button-4>", _on_mousewheel)
+            self.env_canvas.bind_all("<Button-5>", _on_mousewheel)
+
+        # 初始更新滚动区域
+        self.env_content_frame.update_idletasks()
+        self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
+
+    def _ensure_no_empty_space(self):
+        """确保没有顶部空白区域"""
+        # 找到最顶部的元素
+        top_y = float('inf')
+        for widget in self.env_content_frame.winfo_children():
+            widget_y = widget.winfo_y()
+            if widget_y < top_y:
+                top_y = widget_y
+
+        # 如果顶部有空白，移动所有元素以消除空白
+        if top_y > 0:
+            for widget in self.env_content_frame.winfo_children():
+                widget.place(y=widget.winfo_y() - top_y)
+
+    def _on_panel_toggle(self, panel, is_expanded):
+        """处理面板展开/折叠事件"""
+        # 更新布局，确保所有面板正确显示
+        self.env_content_frame.update_idletasks()
+
+        # 如果折叠了面板，确保没有顶部空白
+        if not is_expanded:
+            self._ensure_no_empty_space()
+
+        # 将面板置于正确的位置
+        self._update_panels_position()
+
+    def _update_panels_position(self):
+        """更新所有面板的位置，确保它们正确排列"""
+        # 当前y坐标位置
+        y_pos = 0
+
+        # 按照原始顺序重排面板
+        for panel in [self.pytorch_panel, self.model_panel, self.python_panel]:
+            panel.place(x=0, y=y_pos, relwidth=1)
+            y_pos += panel.winfo_height() + 1  # 加1作为面板间间隔
+
+    def _toggle_card(self, card_id: str) -> None:
+        """切换折叠卡片的展开/收起状态"""
+        if card_id in self.advanced_cards:
+            card = self.advanced_cards[card_id]
+            expanded = card["expanded"].get()
+
+            if expanded:
+                # 收起内容
+                card["content"].pack_forget()
+                card["toggle_btn"].configure(text="▼")
+                card["expanded"].set(False)
+            else:
+                # 展开内容
+                card["content"].pack(fill="x", expand=True)
+                card["toggle_btn"].configure(text="▲")
+                card["expanded"].set(True)
+
+    def _browse_model(self) -> None:
+        """浏览并选择模型文件"""
+        # 尝试使用当前模型所在目录作为初始目录
+        initial_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'res')
+        if not os.path.exists(initial_dir):
+            initial_dir = os.getcwd()
+
+        model_path = filedialog.askopenfilename(
+            title="选择模型文件",
+            initialdir=initial_dir,
+            filetypes=[("模型文件", "*.pt"), ("所有文件", "*.*")]
+        )
+
+        if model_path:
+            self.model_path_var.set(model_path)
+            # 保存到设置
+            if self.settings_manager:
+                self.settings_manager.set_setting("model_path", model_path)
+                self.settings_manager.save_settings()
+
+    def _refresh_model_list(self) -> None:
+        """刷新模型下拉列表"""
+        # 获取res目录
+        res_dir = resource_path(os.path.join("res"))
+
+        try:
+            # 清空下拉列表
+            self.model_combobox["values"] = []
+
+            # 查找所有.pt模型文件
+            if os.path.exists(res_dir):
+                model_files = [f for f in os.listdir(res_dir) if f.lower().endswith('.pt')]
+
+                if model_files:
+                    # 排序并设置为下拉列表的值
+                    model_files.sort()
+                    self.model_combobox["values"] = model_files
+
+                    # 选择第一个值
+                    self.model_combobox.current(0)
+
+                    # 尝试选择当前正在使用的模型
+                    current_model = os.path.basename(self.image_processor.model_path) if hasattr(self.image_processor,
+                                                                                                 'model_path') else None
+
+                    if current_model in model_files:
+                        self.model_combobox.set(current_model)
+
+                    # 更新状态
+                    self.model_status_var.set(f"找到 {len(model_files)} 个模型文件")
+                else:
+                    self.model_status_var.set("未找到任何模型文件")
+            else:
+                self.model_status_var.set("模型目录不存在")
+
+        except Exception as e:
+            logger.error(f"刷新模型列表失败: {e}")
+            self.model_status_var.set(f"刷新失败: {str(e)}")
+
+    def _apply_selected_model(self) -> None:
+        """应用选中的模型"""
+        # 获取选中的模型
+        model_name = self.model_selection_var.get()
+
+        if not model_name:
+            messagebox.showinfo("提示", "请先选择一个模型")
+            return
+
+        # 构建完整路径
+        model_path = resource_path(os.path.join("res", model_name))
+
+        # 检查文件是否存在
+        if not os.path.exists(model_path):
+            messagebox.showerror("错误", f"模型文件不存在: {model_path}")
+            return
+
+        # 如果选中的就是当前使用的模型，无需再次加载
+        current_model = os.path.basename(self.image_processor.model_path) if hasattr(self.image_processor,
+                                                                                     'model_path') else None
+        if model_name == current_model:
+            messagebox.showinfo("提示", f"模型 {model_name} 已经加载")
+            return
+
+        # 确认切换模型
+        if not messagebox.askyesno("确认", f"确定要切换到模型 {model_name} 吗？"):
+            return
+
+        # 更新状态
+        self.model_status_var.set("正在加载...")
+        self.master.update_idletasks()
+
+        try:
+            # 在独立线程中加载模型
+            def load_model_thread():
+                try:
+                    # 加载模型
+                    self.image_processor.load_model(model_path)
+
+                    # 更新UI显示
+                    self.master.after(0, lambda: self.current_model_var.set(model_name))
+                    self.master.after(0, lambda: self.model_status_var.set("已加载"))
+                    self.master.after(0, lambda: messagebox.showinfo("成功", f"模型 {model_name} 已成功加载"))
+
+                except Exception as e:
+                    logger.error(f"加载模型失败: {e}")
+                    self.master.after(0, lambda: self.model_status_var.set(f"加载失败: {str(e)}"))
+                    self.master.after(0, lambda: messagebox.showerror("错误", f"加载模型失败: {e}"))
+
+            # 启动线程
+            threading.Thread(target=load_model_thread, daemon=True).start()
+
+        except Exception as e:
+            logger.error(f"应用模型失败: {e}")
+            self.model_status_var.set(f"加载失败: {str(e)}")
+            messagebox.showerror("错误", f"应用模型失败: {e}")
+
+    def _apply_model(self, model_path: str) -> None:
+        """应用选择的模型"""
+        if not model_path or not os.path.exists(model_path):
+            messagebox.showerror("错误", "请先选择有效的模型文件")
+            return
+
+        # 确认切换模型
+        if not messagebox.askyesno("确认",
+                                   f"确定要切换到模型:\n{os.path.basename(model_path)}吗？\n\n"
+                                   "这将重新加载模型，可能需要几秒钟时间。"):
+            return
+
+        # 显示加载中状态
+        self.status_bar.status_label.config(text=f"正在加载模型...")
+        self.master.update_idletasks()
+
+        try:
+            # 在单独线程中加载模型
+            def load_model_thread():
+                try:
+                    # 加载模型
+                    self.image_processor.load_model(model_path)
+
+                    # 更新UI
+                    self.master.after(0, lambda: self.status_bar.status_label.config(
+                        text=f"模型已加载: {os.path.basename(model_path)}"))
+                    self.master.after(0, lambda: messagebox.showinfo("成功", "模型已成功加载！"))
+                except Exception as e:
+                    logger.error(f"加载模型失败: {e}")
+                    self.master.after(0, lambda: self.status_bar.status_label.config(text=f"加载模型失败: {e}"))
+                    self.master.after(0, lambda: messagebox.showerror("错误", f"加载模型失败: {e}"))
+
+            threading.Thread(target=load_model_thread, daemon=True).start()
+        except Exception as e:
+            self.status_bar.status_label.config(text=f"加载模型失败: {e}")
+            messagebox.showerror("错误", f"加载模型失败: {e}")
+
+    def _check_pytorch_status(self) -> None:
+        """检查PyTorch安装状态"""
+        try:
+            import torch
+            version = torch.__version__
+            device = "GPU (CUDA)" if torch.cuda.is_available() else "CPU"
+            self.pytorch_status_var.set(f"已安装 v{version} ({device})")
+        except ImportError:
+            self.pytorch_status_var.set("未安装")
+        except Exception as e:
+            self.pytorch_status_var.set(f"检查失败: {str(e)}")
+
+    def _install_pytorch(self) -> None:
+        """安装PyTorch"""
+        # 获取版本
+        version = self.pytorch_version_var.get()
+        if not version:
+            messagebox.showinfo("提示", "请选择PyTorch版本")
+            return
+
+        # 确认安装
+        message = f"将安装 {version}"
+        if self.minimal_install_var.get():
+            message += "（仅基础组件）"
+
+        if not messagebox.askyesno("确认安装", message + "\n\n是否继续？"):
+            return
+
+        # 解析版本信息
+        is_cuda = "CPU" not in version
+        cuda_version = None
+        if is_cuda:
+            if "CUDA 11.7" in version:
+                cuda_version = "cu117"
+            elif "CUDA 11.8" in version:
+                cuda_version = "cu118"
+            elif "CUDA 12.1" in version:
+                cuda_version = "cu121"
+
+        pytorch_version = re.search(r"PyTorch (\d+\.\d+\.\d+)", version).group(1)
+
+        # 更新状态并禁用按钮
+        self.install_button.configure(state="disabled")
+        self.pytorch_status_var.set("准备安装...")
+        self.master.update_idletasks()
+
+        # 在线程中安装
+        def install_thread():
+            try:
+                # 构建安装命令
+                cmd = [sys.executable, "-m", "pip", "install"]
+
+                # 添加PyTorch包和版本
+                if is_cuda:
+                    cmd.append(f"torch=={pytorch_version}+{cuda_version}")
+                    cmd.extend(["-f", f"https://download.pytorch.org/whl/{cuda_version}/torch_stable.html"])
+                else:
+                    cmd.append(f"torch=={pytorch_version}+cpu")
+                    cmd.extend(["-f", "https://download.pytorch.org/whl/cpu/torch_stable.html"])
+
+                # 添加其他包
+                if not self.minimal_install_var.get():
+                    if is_cuda:
+                        cmd.extend([f"torchvision=={pytorch_version}+{cuda_version}",
+                                    f"torchaudio=={pytorch_version}+{cuda_version}"])
+                    else:
+                        cmd.extend([f"torchvision=={pytorch_version}+cpu", f"torchaudio=={pytorch_version}+cpu"])
+
+                # 更新UI
+                self.master.after(0, lambda: self.pytorch_status_var.set("正在安装..."))
+
+                # 执行命令
+                if platform.system() == "Windows":
+                    process = subprocess.Popen(
+                        f"start cmd /k \"{' '.join(cmd)} && echo PyTorch安装完成，请关闭此窗口 || echo PyTorch安装失败，请检查错误信息\"",
+                        shell=True)
+                else:  # Linux/Mac
+                    process = subprocess.Popen(
+                        f"gnome-terminal -- bash -c \"{' '.join(cmd)}; echo 'PyTorch安装完成，按任意键关闭此窗口'; read -n 1\"",
+                        shell=True)
+
+                # 通知用户
+                self.master.after(0, lambda: messagebox.showinfo("安装已开始",
+                                                                 "PyTorch安装已在命令行窗口启动，\n"
+                                                                 "请查看命令行窗口了解进度。\n\n"
+                                                                 "安装完成后，您需要重启应用程序以应用更改。"))
+
+                # 还原按钮状态
+                self.master.after(0, lambda: self.install_button.configure(state="normal"))
+                self.master.after(0, lambda: self.pytorch_status_var.set("安装中..."))
+
+            except Exception as e:
+                logger.error(f"安装PyTorch失败: {e}")
+                self.master.after(0, lambda: self.pytorch_status_var.set(f"安装失败: {str(e)}"))
+                self.master.after(0, lambda: self.install_button.configure(state="normal"))
+                self.master.after(0, lambda: messagebox.showerror("错误", f"安装PyTorch失败: {e}"))
+
+        # 启动安装线程
+        threading.Thread(target=install_thread, daemon=True).start()
+
+    def _install_python_package(self) -> None:
+        """安装Python包"""
+        # 获取包名
+        package = self.package_var.get().strip()
+        if not package:
+            messagebox.showinfo("提示", "请输入包名称")
+            return
+
+        # 获取版本约束
+        version_constraint = self.version_constraint_var.get().strip()
+
+        # 构建完整包规范
+        if version_constraint:
+            package_spec = f"{package}{version_constraint}"
+        else:
+            package_spec = package
+
+        # 确认安装
+        if not messagebox.askyesno("确认安装", f"将安装 {package_spec}\n\n是否继续？"):
+            return
+
+        # 更新状态
+        self.package_status_var.set("准备安装...")
+        self.master.update_idletasks()
+
+        # 在线程中安装
+        def install_thread():
+            try:
+                # 构建安装命令
+                cmd = [sys.executable, "-m", "pip", "install", "--upgrade", package_spec]
+
+                # 更新UI
+                self.master.after(0, lambda: self.package_status_var.set("正在安装..."))
+
+                # 执行命令
+                if platform.system() == "Windows":
+                    process = subprocess.Popen(
+                        f"start cmd /k \"{' '.join(cmd)} && echo 包安装完成，请关闭此窗口 || echo 包安装失败，请检查错误信息\"",
+                        shell=True)
+                else:  # Linux/Mac
+                    process = subprocess.Popen(
+                        f"gnome-terminal -- bash -c \"{' '.join(cmd)}; echo '包安装完成，按任意键关闭此窗口'; read -n 1\"",
+                        shell=True)
+
+                # 通知用户
+                self.master.after(0, lambda: messagebox.showinfo("安装已开始",
+                                                                 f"{package} 安装已在命令行窗口启动，\n"
+                                                                 "请查看命令行窗口了解进度。"))
+
+                # 还原状态
+                self.master.after(0, lambda: self.package_status_var.set("安装中..."))
+
+            except Exception as e:
+                logger.error(f"安装包失败: {e}")
+                self.master.after(0, lambda: self.package_status_var.set(f"安装失败: {str(e)}"))
+                self.master.after(0, lambda: messagebox.showerror("错误", f"安装包失败: {e}"))
+
+        # 启动安装线程
+        threading.Thread(target=install_thread, daemon=True).start()
+
+    def _run_pytorch_install(self, version: str, cuda_version: str) -> None:
+        """在后台线程中运行PyTorch安装"""
+        self.pytorch_status_var.set("正在安装...")
+        self.pytorch_progress_var.set(0)
+
+        try:
+            # 构建安装命令
+            cmd = [sys.executable, "-m", "pip", "install"]
+
+            # 基于版本和CUDA版本构建PyTorch安装URL
+            if "CPU Only" in cuda_version:
+                cmd.append(f"torch=={version}+cpu")
+                cmd.extend(["-f", "https://download.pytorch.org/whl/cpu/torch_stable.html"])
+            elif "CUDA" in cuda_version:
+                cuda_ver = cuda_version.split(" ")[1].replace(".", "")  # 例如将CUDA 11.8转换为cu118
+                cmd.append(f"torch=={version}+{cuda_ver}")
+                cmd.extend(["-f", f"https://download.pytorch.org/whl/{cuda_ver}/torch_stable.html"])
+            else:
+                cmd.append(f"torch=={version}")
+
+            # 设置进度更新
+            def update_progress(line):
+                if "%" in line:
+                    try:
+                        percent = float(line.split("%")[0].split(" ")[-1].strip())
+                        self.pytorch_progress_var.set(percent)
+
+                        # 更新UI
+                        self.master.update_idletasks()
+                    except:
+                        pass
+
+            # 执行命令并捕获输出
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+
+            # 读取输出
+            for line in process.stdout:
+                update_progress(line)
+
+            process.wait()
+
+            if process.returncode == 0:
+                self.master.after(0, lambda: self.pytorch_status_var.set("安装成功"))
+                self.master.after(0, lambda: self.pytorch_progress_var.set(100))
+                self.master.after(1000, self._check_pytorch_status)
+            else:
+                self.master.after(0, lambda: self.pytorch_status_var.set("安装失败"))
+
+        except Exception as e:
+            self.master.after(0, lambda: self.pytorch_status_var.set(f"安装错误: {str(e)}"))
+
+        finally:
+            # 启用安装按钮
+            self.master.after(0, lambda: self._enable_pytorch_buttons())
+
+    def _enable_pytorch_buttons(self) -> None:
+        """重新启用PyTorch安装按钮"""
+        for widget in self.advanced_cards["pytorch"]["content"].winfo_children():
+            if isinstance(widget, ttk.Frame):
+                for w in widget.winfo_children():
+                    if isinstance(w, ttk.Button):
+                        w.configure(state="normal")
 
     def _update_iou_label(self, value) -> None:
         """更新IOU标签显示"""
@@ -1313,6 +2257,17 @@ FP16加速 (半精度浮点数加速)
                 if self.file_listbox.size() > 0 and not self.file_listbox.curselection():
                     self.file_listbox.selection_set(0)
                     self.on_file_selected(None)
+
+    def _on_tab_changed(self, event):
+        """处理标签页切换事件 - 更新版本"""
+        # 获取当前选中的标签页
+        current_tab = self.advanced_notebook.select()
+        tab_text = self.advanced_notebook.tab(current_tab, "text")
+
+        # 如果切换到了环境维护标签页，更新滚动区域
+        if tab_text == "环境维护" and hasattr(self, 'env_canvas'):
+            # 延迟执行以确保界面已完全渲染
+            self.master.after(100, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
 
     def _get_current_settings(self) -> Dict[str, Any]:
         """获取当前UI中的所有设置
