@@ -738,19 +738,6 @@ class ObjectDetectionGUI:
             buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=12)
         reset_button.pack(side="right")
 
-        # 确保在初始化后面板能正确显示
-        self.advanced_notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
-
-        # 初次显示页面时，确保环境维护标签页内容正确加载
-        self.master.after(500, lambda: self._ensure_env_maintenance_visible())
-
-    def _ensure_env_maintenance_visible(self):
-        """确保环境维护标签页在初始加载时内容可见"""
-        if hasattr(self, 'env_content_frame') and hasattr(self, 'env_canvas'):
-            self.env_content_frame.update_idletasks()
-            self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
-
-
     def _create_model_params_content(self) -> None:
         """创建模型参数设置标签页内容"""
         # 模型参数设置
@@ -850,6 +837,18 @@ class ObjectDetectionGUI:
             font=SMALL_FONT,
             foreground="gray")
         agnostic_nms_desc.pack(anchor="w", padx=25, pady=(0, 5))
+
+    def _create_env_maintenance_content(self) -> None:
+        """创建环境维护标签页内容"""
+        # 初始化折叠卡片存储器
+        if not hasattr(self, 'advanced_cards'):
+            self.advanced_cards = {}
+
+        # 创建模型选择卡片
+        self._create_model_selection_card(self.env_maintenance_tab)
+
+        # 创建PyTorch安装卡片
+        self._create_pytorch_install_card(self.env_maintenance_tab)
 
     def _create_model_selection_card(self, parent) -> None:
         """创建模型选择折叠卡片 - 与PyTorch安装卡片风格一致"""
@@ -971,30 +970,34 @@ class ObjectDetectionGUI:
         self._refresh_model_list()
 
     def _create_env_maintenance_content(self) -> None:
-        """创建环境维护标签页内容 - 简化版本"""
-        # 清除旧内容
+        """创建环境维护标签页内容 - 修复空白区域问题"""
+        # 确保清除可能的旧内容
         for widget in self.env_maintenance_tab.winfo_children():
             widget.destroy()
 
-        # 创建滚动视图容器
-        self.env_scrollable = ttk.Frame(self.env_maintenance_tab)
-        self.env_scrollable.pack(fill="both", expand=True)
+        # 创建框架来容纳所有内容
+        main_frame = ttk.Frame(self.env_maintenance_tab)
+        main_frame.pack(fill="both", expand=True)
 
-        # 创建Canvas和滚动条
-        self.env_canvas = tk.Canvas(self.env_scrollable, highlightthickness=0)
+        # 创建一个Canvas作为滚动容器
+        self.env_canvas = tk.Canvas(main_frame, highlightthickness=0)
         self.env_canvas.pack(side="left", fill="both", expand=True)
 
-        self.env_scrollbar = ttk.Scrollbar(self.env_scrollable, orient="vertical", command=self.env_canvas.yview)
-        self.env_scrollbar.pack(side="right", fill="y")
-        self.env_canvas.configure(yscrollcommand=self.env_scrollbar.set)
+        # 添加垂直滚动条
+        env_scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.env_canvas.yview)
+        env_scrollbar.pack(side="right", fill="y")
+        self.env_canvas.configure(yscrollcommand=env_scrollbar.set)
 
-        # 创建内容框架
+        # 主内容框架 - 所有面板将放在此框架内
         self.env_content_frame = ttk.Frame(self.env_canvas)
+
+        # 在Canvas上创建一个窗口来显示内容框架
         self.env_canvas_window = self.env_canvas.create_window(
             (0, 0),
             window=self.env_content_frame,
             anchor="nw",
-            width=self.env_canvas.winfo_reqwidth()
+            tags="self.env_content_frame",
+            width=self.env_canvas.winfo_width()  # 确保宽度正确
         )
 
         # 确保系统变量已初始化
@@ -1005,10 +1008,10 @@ class ObjectDetectionGUI:
         self.pytorch_panel = CollapsiblePanel(
             self.env_content_frame,
             "安装 PyTorch",
-            subtitle="安装 PyTorch 与 xFormers",
+            subtitle="安装 PyTorchs",
             icon="📦"
         )
-        self.pytorch_panel.pack(fill="x", expand=False)
+        self.pytorch_panel.pack(fill="x", expand=False, pady=(0, 1))
 
         # 版本选择下拉框
         version_frame = ttk.Frame(self.pytorch_panel.content_padding)
@@ -1204,154 +1207,64 @@ class ObjectDetectionGUI:
         # 初始检查PyTorch安装状态
         self._check_pytorch_status()
 
-        # 设置面板折叠/展开事件处理
-        for panel in [self.pytorch_panel, self.model_panel, self.python_panel]:
-            panel.bind_toggle_callback(self._on_panel_toggle)
+        # 修复滚动问题
+        self.env_content_frame.update_idletasks()
+        self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
 
-        # 配置滚动
+        # 绑定事件以处理滚动和调整大小
         self._configure_env_scrolling()
 
-        # 初始化显示
-        self._refresh_model_list()
-        self._check_pytorch_status()
-
-    def _bind_scrollwheel(self):
-        """绑定鼠标滚轮事件"""
-
-        def _on_mousewheel(event):
-            # 根据不同平台处理鼠标滚轮事件
-            if event.state & 0x4:  # 在 Windows/Linux 上的 Control 键
-                # 按住 Ctrl 滚动速度更快
-                delta = 3
-            else:
-                delta = 1
-
-            # 计算滚动方向和距离
-            if platform.system() == "Windows":
-                scroll_direction = -1 if event.delta > 0 else 1
-            elif platform.system() == "Darwin":  # macOS
-                scroll_direction = -1 if event.delta > 0 else 1
-            else:  # Linux
-                if event.num == 4:
-                    scroll_direction = -1
-                elif event.num == 5:
-                    scroll_direction = 1
-                else:
-                    scroll_direction = 0
-
-            # 移动所有可见内容，模拟滚动效果
-            y_move = scroll_direction * delta * 20  # 调整滚动速度
-            for widget in self.env_content_frame.winfo_children():
-                widget.place(y=widget.winfo_y() - y_move)
-
-            # 防止过度滚动导致顶部空白
-            self._ensure_no_empty_space()
-
-        # 根据不同平台绑定滚轮事件
-        if platform.system() == "Windows":
-            self.env_content_frame.bind_all("<MouseWheel>", _on_mousewheel)
-        elif platform.system() == "Darwin":  # macOS
-            self.env_content_frame.bind_all("<MouseWheel>", _on_mousewheel)
-        else:  # Linux
-            self.env_content_frame.bind_all("<Button-4>", _on_mousewheel)
-            self.env_content_frame.bind_all("<Button-5>", _on_mousewheel)
-
     def _configure_env_scrolling(self):
-        """配置环境维护标签页的滚动功能 - 简化版本"""
+        """配置环境维护标签页的滚动功能"""
 
-        # 更新滚动区域尺寸
+        # 更新滚动区域大小
         def _update_scrollregion(event=None):
             self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
 
-        # 当Canvas大小改变时，调整窗口宽度
+        # 确保当窗口调整大小时，canvas窗口宽度跟随调整
         def _configure_canvas(event):
-            # 设置内容框架宽度与Canvas相同
-            canvas_width = event.width
-            self.env_canvas.itemconfigure(self.env_canvas_window, width=canvas_width)
+            self.env_canvas.itemconfig(self.env_canvas_window, width=event.width)
 
-        # 处理面板展开/折叠事件
-        def _on_panel_toggle(panel, is_expanded):
-            # 更新滚动区域
-            self.env_content_frame.update_idletasks()
-            _update_scrollregion()
-
-        # 处理鼠标滚轮事件
+        # 设置鼠标滚轮事件
         def _on_mousewheel(event):
-            # 检查鼠标是否在canvas上
-            x, y = self.env_canvas.winfo_pointerxy()
-            canvas_x = self.env_canvas.winfo_rootx()
-            canvas_y = self.env_canvas.winfo_rooty()
-            canvas_width = self.env_canvas.winfo_width()
-            canvas_height = self.env_canvas.winfo_height()
-
-            if (x >= canvas_x and x <= canvas_x + canvas_width and
-                    y >= canvas_y and y <= canvas_y + canvas_height):
-
-                # Windows系统
-                if hasattr(event, 'delta'):
-                    self.env_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-                # Linux系统
-                elif hasattr(event, 'num'):
-                    if event.num == 4:  # 向上滚动
-                        self.env_canvas.yview_scroll(-1, "units")
-                    elif event.num == 5:  # 向下滚动
-                        self.env_canvas.yview_scroll(1, "units")
+            # Windows上用event.delta, Linux/macOS上用event.num和event.delta
+            if event.num == 4 or event.delta > 0:  # 向上滚动
+                self.env_canvas.yview_scroll(-1, "units")
+            elif event.num == 5 or event.delta < 0:  # 向下滚动
+                self.env_canvas.yview_scroll(1, "units")
 
         # 绑定事件
         self.env_content_frame.bind("<Configure>", _update_scrollregion)
         self.env_canvas.bind("<Configure>", _configure_canvas)
 
-        # 绑定面板切换事件
-        for panel in [self.pytorch_panel, self.model_panel, self.python_panel]:
-            panel.bind_toggle_callback(_on_panel_toggle)
-
-        # 绑定鼠标滚轮事件，根据不同平台
+        # 根据不同平台绑定滚轮事件
         import platform
+
         if platform.system() == "Windows":
             self.env_canvas.bind_all("<MouseWheel>", _on_mousewheel)
         else:  # Linux和macOS
             self.env_canvas.bind_all("<Button-4>", _on_mousewheel)
             self.env_canvas.bind_all("<Button-5>", _on_mousewheel)
 
-        # 初始更新滚动区域
-        self.env_content_frame.update_idletasks()
-        self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all"))
+        # 为折叠面板添加回调，以便在展开/折叠时更新滚动区域
+        # 修改CollapsiblePanel的展开和折叠方法
+        original_expand = self.pytorch_panel.expand
+        original_collapse = self.pytorch_panel.collapse
 
-    def _ensure_no_empty_space(self):
-        """确保没有顶部空白区域"""
-        # 找到最顶部的元素
-        top_y = float('inf')
-        for widget in self.env_content_frame.winfo_children():
-            widget_y = widget.winfo_y()
-            if widget_y < top_y:
-                top_y = widget_y
+        def expand_with_update(self):
+            original_expand(self)
+            _update_scrollregion()
 
-        # 如果顶部有空白，移动所有元素以消除空白
-        if top_y > 0:
-            for widget in self.env_content_frame.winfo_children():
-                widget.place(y=widget.winfo_y() - top_y)
+        def collapse_with_update(self):
+            original_collapse(self)
+            _update_scrollregion()
 
-    def _on_panel_toggle(self, panel, is_expanded):
-        """处理面板展开/折叠事件"""
-        # 更新布局，确保所有面板正确显示
-        self.env_content_frame.update_idletasks()
-
-        # 如果折叠了面板，确保没有顶部空白
-        if not is_expanded:
-            self._ensure_no_empty_space()
-
-        # 将面板置于正确的位置
-        self._update_panels_position()
-
-    def _update_panels_position(self):
-        """更新所有面板的位置，确保它们正确排列"""
-        # 当前y坐标位置
-        y_pos = 0
-
-        # 按照原始顺序重排面板
+        # 替换方法
         for panel in [self.pytorch_panel, self.model_panel, self.python_panel]:
-            panel.place(x=0, y=y_pos, relwidth=1)
-            y_pos += panel.winfo_height() + 1  # 加1作为面板间间隔
+            panel.original_expand = panel.expand
+            panel.original_collapse = panel.collapse
+            panel.expand = lambda p=panel: (p.original_expand(), _update_scrollregion())
+            panel.collapse = lambda p=panel: (p.original_collapse(), _update_scrollregion())
 
     def _toggle_card(self, card_id: str) -> None:
         """切换折叠卡片的展开/收起状态"""
@@ -2259,7 +2172,7 @@ FP16加速 (半精度浮点数加速)
                     self.on_file_selected(None)
 
     def _on_tab_changed(self, event):
-        """处理标签页切换事件 - 更新版本"""
+        """处理标签页切换事件"""
         # 获取当前选中的标签页
         current_tab = self.advanced_notebook.select()
         tab_text = self.advanced_notebook.tab(current_tab, "text")
@@ -2267,7 +2180,7 @@ FP16加速 (半精度浮点数加速)
         # 如果切换到了环境维护标签页，更新滚动区域
         if tab_text == "环境维护" and hasattr(self, 'env_canvas'):
             # 延迟执行以确保界面已完全渲染
-            self.master.after(100, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
+            self.master.after(10, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
 
     def _get_current_settings(self) -> Dict[str, Any]:
         """获取当前UI中的所有设置
