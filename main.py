@@ -1,7 +1,7 @@
 """
 物种信息检测应用程序
 支持图像物种识别、探测图片保存、Excel输出和图像分类功能
-Windows 11 风格界面 - 优化版本
+现代化桌面应用程序界面 - 优化版本
 """
 import sys
 import os
@@ -48,9 +48,9 @@ logger = logging.getLogger(__name__)
 # 确保system文件夹在路径中
 sys.path.append(os.path.join(os.path.dirname(__file__), 'system'))
 
-# 导入GUI模块
+# 导入GUI模块和配置常量
 from system.gui import ObjectDetectionGUI
-import tkinter as tk
+from system.config import APP_TITLE, APP_VERSION  # 添加导入APP_TITLE
 
 def main():
     """程序入口点"""
@@ -160,9 +160,9 @@ def main():
 
     # 创建主窗口
     root = tk.Tk()
-    root.resizable(False, False)
+    root.title(APP_TITLE)  # 设置窗口标题
 
-    from system.settings_manager import SettingsManager  # 添加导入
+    from system.settings_manager import SettingsManager
 
     # 创建实际的SettingsManager对象
     settings_manager = SettingsManager(base_dir)
@@ -176,32 +176,6 @@ def main():
     # 如果CUDA不可用，禁用FP16选项并设置为False
     if not cuda_available:
         app.use_fp16_var.set(False)
-
-        # 找到fp16开关并禁用它 - 在创建完所有UI组件后
-        def disable_fp16_switch():
-            try:
-                # 检查高级设置面板中的FP16开关
-                for widget in app.advanced_frame.winfo_children():
-                    if isinstance(widget, tk.Frame) or isinstance(widget, ttk.Frame):
-                        # 查找标签框架
-                        for child in widget.winfo_children():
-                            if hasattr(child, 'winfo_children'):
-                                for grandchild in child.winfo_children():
-                                    # 寻找FP16开关
-                                    if hasattr(grandchild, 'cget') and hasattr(grandchild, 'configure'):
-                                        try:
-                                            if grandchild.cget("text") == "使用FP16加速推理":
-                                                grandchild.configure(state="disabled")
-                                                logger.info("已禁用FP16开关")
-                                                return
-                                        except:
-                                            pass
-                logger.info("未找到FP16开关，可能UI结构有所不同")
-            except Exception as e:
-                logger.error(f"禁用FP16开关失败: {e}")
-
-        # 延迟执行禁用操作，确保UI已完全创建
-        root.after(500, disable_fp16_switch)
 
     # 如果需要继续处理，设置excel_data并启动处理
     if resume_processing and resume_from > 0:

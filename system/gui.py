@@ -1,11 +1,12 @@
 """
-GUI模块 - 提供应用程序主界面和交互逻辑 (添加处理进度缓存功能)
+GUI模块 - 提供现代化桌面应用程序界面 (清晰的侧边栏菜单和主工作区)
 """
 
 import os
 import time
 import logging
 import threading
+import platform  # 添加这一行以导入platform模块
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
@@ -60,16 +61,16 @@ class ObjectDetectionGUI:
         self.cache_data = cache_data
         self.resume_processing = resume_processing
 
-        # 应用Windows 11主题
-        sv_ttk.set_theme("light")
+        self._apply_system_theme()
 
         # 设置窗口尺寸和位置
-        width, height = 730, 730
+        width, height = 900, 700  # 增加窗口宽度以适应侧边栏
         screen_width = master.winfo_screenwidth()
         screen_height = master.winfo_screenheight()
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         master.geometry(f"{width}x{height}+{x}+{y}")
+        master.minsize(width, height)  # 设置最小窗口尺寸
 
         # 设置窗口图标
         try:
@@ -89,6 +90,7 @@ class ObjectDetectionGUI:
         self.current_detection_results = None
         self.original_image = None  # 保存原始图像
         self.current_image_path = None  # 保存当前图像路径
+        self.current_page = "settings"  # 当前显示的页面
 
         # 处理进度缓存相关变量
         self.cache_interval = 10  # 每处理10张图片保存一次缓存
@@ -96,6 +98,7 @@ class ObjectDetectionGUI:
 
         # 创建GUI元素
         self._create_ui_elements()
+        self._setup_styles()
 
         # 加载设置到UI
         if settings:
@@ -113,6 +116,9 @@ class ObjectDetectionGUI:
         if self.resume_processing and self.cache_data:
             # 设置延迟，确保UI已完全加载
             self.master.after(1000, self._resume_processing)
+
+        self.setup_theme_monitoring()
+
 
     def _resume_processing(self) -> None:
         """继续上次未完成的处理任务"""
@@ -152,105 +158,490 @@ class ObjectDetectionGUI:
         # 自动开始处理
         self.start_processing(resume_from=processed_files)
 
+    def _apply_system_theme(self) -> None:
+        """应用与系统匹配的主题"""
+        try:
+            # 尝试获取系统主题颜色
+            import darkdetect
+            system_theme = darkdetect.theme().lower()  # 返回 'Dark' 或 'Light'
+
+            if system_theme == 'dark':
+                sv_ttk.set_theme("dark")
+                self.is_dark_mode = True
+            else:
+                sv_ttk.set_theme("light")
+                self.is_dark_mode = False
+
+            logger.info(f"已应用系统主题: {system_theme}")
+
+            # 获取系统强调色
+            self._detect_system_accent_color()
+
+        except Exception as e:
+            # 如果无法检测系统主题，默认使用亮色主题
+            sv_ttk.set_theme("light")
+            self.is_dark_mode = False
+            logger.warning(f"无法检测系统主题，使用默认亮色主题: {e}")
+
+    def _detect_system_accent_color(self) -> None:
+        """检测系统强调色并应用"""
+        try:
+            # 根据操作系统类型检测系统强调色
+            system = platform.system()
+
+            if system == "Windows":
+                import winreg
+                registry = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
+                key = winreg.OpenKey(registry, r"Software\Microsoft\Windows\DWM")
+                # 获取十六进制的颜色值并转换
+                color_dword = winreg.QueryValueEx(key, "AccentColor")[0]
+                # Windows存储AABBGGRR格式，转换为RRGGBB格式
+                color_hex = f"#{color_dword & 0xFF:02x}{(color_dword >> 8) & 0xFF:02x}{(color_dword >> 16) & 0xFF:02x}"
+                self.accent_color = color_hex
+
+            elif system == "Darwin":  # macOS
+                # macOS获取强调色较复杂，需要使用Apple Script或其他方法
+                # 这里使用默认的系统蓝色
+                self.accent_color = "#0078d7"
+
+            else:  # Linux等其他系统
+                # 使用默认蓝色
+                self.accent_color = "#0078d7"
+
+            logger.info(f"获取到系统强调色: {self.accent_color}")
+
+        except Exception as e:
+            # 如果无法获取系统强调色，使用默认的蓝色
+            self.accent_color = "#0078d7"
+            logger.warning(f"无法获取系统强调色，使用默认颜色: {e}")
+
+    def setup_theme_monitoring(self):
+        """设置主题监控，每隔一段时间检查系统主题是否变化"""
+        if platform.system() == "Windows" or platform.system() == "Darwin":  # Windows或macOS
+            # 每10秒检查一次主题变化
+            self._check_theme_change()
+
+    def _check_theme_change(self):
+        """检查系统主题是否发生变化"""
+        try:
+            import darkdetect
+            current_theme = darkdetect.theme().lower()
+
+            if (current_theme == 'dark' and not self.is_dark_mode) or \
+                    (current_theme == 'light' and self.is_dark_mode):
+                # 主题已经改变，需要更新
+                self._apply_system_theme()
+                self._setup_styles()  # 重新应用样式
+
+                # 更新UI组件的样式
+                self._update_ui_theme()
+
+                logger.info(f"系统主题已变更为: {current_theme}")
+        except Exception as e:
+            logger.warning(f"检查主题变化失败: {e}")
+
+        # 10秒后再次检查
+        self.master.after(10000, self._check_theme_change)
+
+    def _update_ui_theme(self):
+        """更新UI组件的主题样式"""
+        # 更新侧边栏的背景色
+        if hasattr(self, 'sidebar'):
+            sidebar_bg = "#1e1e1e" if self.is_dark_mode else "#2c3e50"
+            for widget in self.sidebar.winfo_children():
+                if hasattr(widget, 'configure'):
+                    try:
+                        if isinstance(widget, ttk.Label) or isinstance(widget, ttk.Frame):
+                            widget.configure(background=sidebar_bg)
+                    except:
+                        pass
+
+        # 更新当前选中的导航按钮
+        self._show_page(self.current_page)
+
+    def _setup_styles(self):
+        """设置自定义样式"""
+        style = ttk.Style()
+
+        # 使用系统强调色作为侧边栏颜色
+        if not hasattr(self, 'accent_color'):
+            self.accent_color = "#0078d7"  # 默认值
+
+        sidebar_bg = self.accent_color  # 使用系统强调色作为侧边栏背景
+
+        # 计算适合的文字颜色 (根据背景色亮度)
+        # 将十六进制颜色转换为RGB
+        r = int(sidebar_bg[1:3], 16)
+        g = int(sidebar_bg[3:5], 16)
+        b = int(sidebar_bg[5:7], 16)
+
+        # 计算亮度
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+
+        # 亮度高于128使用黑色文字，否则使用白色文字
+        sidebar_fg = "#000000" if brightness > 128 else "#ffffff"
+
+        # 计算更深/更浅的背景色用于悬停和选中效果
+        # 如果背景色较亮，为了悬停效果更明显，使其变暗
+        # 如果背景色较暗，则使其变亮
+        if brightness > 128:
+            # 使颜色变暗
+            factor = 0.8
+            r_hover = max(0, int(r * factor))
+            g_hover = max(0, int(g * factor))
+            b_hover = max(0, int(b * factor))
+
+            # 使选中色更暗
+            factor_selected = 0.7
+            r_selected = max(0, int(r * factor_selected))
+            g_selected = max(0, int(g * factor_selected))
+            b_selected = max(0, int(b * factor_selected))
+        else:
+            # 使颜色变亮
+            factor = 1.2
+            r_hover = min(255, int(r * factor))
+            g_hover = min(255, int(g * factor))
+            b_hover = min(255, int(b * factor))
+
+            # 使选中色更亮
+            factor_selected = 1.3
+            r_selected = min(255, int(r * factor_selected))
+            g_selected = min(255, int(g * factor_selected))
+            b_selected = min(255, int(b * factor_selected))
+
+        sidebar_hover_bg = f"#{r_hover:02x}{g_hover:02x}{b_hover:02x}"
+        sidebar_selected_bg = f"#{r_selected:02x}{g_selected:02x}{b_selected:02x}"
+
+        # 侧边栏样式
+        style.configure("Sidebar.TFrame", background=sidebar_bg)
+
+        # 创建圆角按钮样式 - 由于ttk不直接支持圆角，需要使用Canvas或自定义Frame实现
+        # 这里我们先设置好基本样式，然后在创建按钮时额外处理
+        style.configure("Sidebar.TButton",
+                        font=("Segoe UI", 11),
+                        background=sidebar_bg,
+                        foreground=sidebar_fg,
+                        borderwidth=0,
+                        focusthickness=0,
+                        relief="flat",
+                        padding=(10, 15),
+                        anchor="w")
+
+        # 侧边栏按钮激活/悬停样式
+        style.map("Sidebar.TButton",
+                  background=[("active", sidebar_hover_bg), ("pressed", sidebar_selected_bg)],
+                  foreground=[("active", sidebar_fg), ("pressed", sidebar_fg)])
+
+        # 侧边栏选中按钮样式
+        style.configure("SidebarSelected.TButton",
+                        background=sidebar_selected_bg,
+                        foreground=sidebar_fg,
+                        font=("Segoe UI", 11, "bold"),
+                        borderwidth=0,
+                        focusthickness=0,
+                        relief="flat",
+                        padding=(10, 15),
+                        anchor="w")
+
+        # 内容区标题样式
+        style.configure("Title.TLabel",
+                        font=("Segoe UI", 14, "bold"),
+                        padding=(0, 10, 0, 10))
+
+        # 开始处理按钮样式
+        style.configure("Process.TButton",
+                        font=("Segoe UI", 11),
+                        padding=(10, 5))
+
     def _create_ui_elements(self) -> None:
         """创建GUI界面元素"""
-        # 配置主窗口
-        self.master.columnconfigure(0, weight=1)
-        self.master.rowconfigure(1, weight=1)
+        # 主布局 - 使用网格布局
+        self.master.columnconfigure(1, weight=1)
+        self.master.rowconfigure(0, weight=1)
 
-        # 创建标题栏
-        title_frame = ttk.Frame(self.master)
-        title_frame.grid(row=0, column=0, sticky="ew", padx=PADDING, pady=(PADDING, 0))
+        # 创建侧边栏
+        self._create_sidebar()
 
-        title_label = ttk.Label(title_frame, text=APP_TITLE.split('v')[0], font=('Segoe UI', 16, 'bold'))
-        title_label.pack(side="left", padx=0)
+        # 创建主要内容区域
+        self.content_frame = ttk.Frame(self.master)
+        self.content_frame.grid(row=0, column=1, sticky="nsew")
+        self.content_frame.columnconfigure(0, weight=1)
+        self.content_frame.rowconfigure(0, weight=1)
 
-        # 主内容区域 - 使用笔记本控件创建选项卡界面
-        self.notebook = ttk.Notebook(self.master)
-        self.notebook.grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=PADDING)
+        # 创建各个页面
+        self._create_settings_page()
+        self._create_preview_page()
+        self._create_advanced_page()
+        self._create_about_page()
 
-        # 选项卡1：基本设置
-        self.settings_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.settings_frame, text="基本设置")
+        # 默认显示基本设置页面
+        self._show_page("settings")
+
+        # 底部状态栏
+        self.status_bar = InfoBar(self.master)
+        self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+    def _create_sidebar(self) -> None:
+        """创建侧边栏菜单"""
+        # 使用系统强调色作为侧边栏背景
+        sidebar_bg = self.accent_color if hasattr(self, 'accent_color') else "#0078d7"
+
+        # 计算适合的文字颜色
+        # 将十六进制颜色转换为RGB
+        r = int(sidebar_bg[1:3], 16)
+        g = int(sidebar_bg[3:5], 16)
+        b = int(sidebar_bg[5:7], 16)
+
+        # 计算亮度
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+
+        # 亮度高于128使用黑色文字，否则使用白色文字
+        sidebar_fg = "#000000" if brightness > 128 else "#ffffff"
+
+        # 创建侧边栏框架
+        self.sidebar = ttk.Frame(self.master, style="Sidebar.TFrame", width=180)
+        self.sidebar.grid(row=0, column=0, sticky="ns")
+        self.sidebar.grid_propagate(False)  # 防止框架大小随内容变化
+
+        # 创建应用标题/Logo
+        logo_frame = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
+        logo_frame.pack(fill="x", pady=(20, 30))
+
+        # 尝试加载Logo
+        try:
+            logo_path = resource_path(os.path.join("res", "logo.png"))
+            logo_img = Image.open(logo_path)
+            logo_img = logo_img.resize((50, 50), Image.LANCZOS)
+            logo_photo = ImageTk.PhotoImage(logo_img)
+            logo_label = ttk.Label(logo_frame, image=logo_photo, background=sidebar_bg)
+            logo_label.image = logo_photo  # 保持引用
+            logo_label.pack(pady=(0, 5))
+        except Exception:
+            pass
+
+        # 应用名称标签
+        app_name = ttk.Label(
+            logo_frame,
+            text="动物检测系统",
+            font=("Segoe UI", 12, "bold"),
+            foreground=sidebar_fg,
+            background=sidebar_bg
+        )
+        app_name.pack()
+
+        # 创建分隔线
+        sep = ttk.Separator(self.sidebar, orient="horizontal")
+        sep.pack(fill="x", padx=15, pady=10)
+
+        # 创建侧边栏按钮
+        self.nav_buttons = {}
+
+        # 定义菜单项
+        menu_items = [
+            ("settings", "基本设置"),
+            ("preview", "图像预览"),
+            ("advanced", "高级设置"),
+            ("about", "关于")
+        ]
+
+        # 创建按钮容器 - 使用普通的tk.Frame以便能设置背景色
+        buttons_frame = tk.Frame(self.sidebar, bg=sidebar_bg)
+        buttons_frame.pack(fill="x", padx=10, pady=5)
+
+        # 计算更深/更浅的背景色用于悬停和选中效果
+        if brightness > 128:
+            # 使颜色变暗
+            factor_selected = 0.7
+            r_selected = max(0, int(r * factor_selected))
+            g_selected = max(0, int(g * factor_selected))
+            b_selected = max(0, int(b * factor_selected))
+        else:
+            # 使颜色变亮
+            factor_selected = 1.3
+            r_selected = min(255, int(r * factor_selected))
+            g_selected = min(255, int(g * factor_selected))
+            b_selected = min(255, int(b * factor_selected))
+
+        sidebar_selected_bg = f"#{r_selected:02x}{g_selected:02x}{b_selected:02x}"
+
+        # 创建圆角按钮
+        from system.ui_components import RoundedButton
+
+        for page_id, page_name in menu_items:
+            button = RoundedButton(
+                buttons_frame,
+                text=page_name,
+                command=lambda p=page_id: self._show_page(p),
+                bg=sidebar_bg,
+                fg=sidebar_fg,
+                width=160,
+                height=40,
+                radius=15  # 圆角半径
+            )
+            button.pack(fill="x", pady=3)
+            self.nav_buttons[page_id] = button
+
+        # 为了填充空间，添加一个空的Frame
+        spacer = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
+        spacer.pack(fill="both", expand=True)
+
+        # 添加版本信息
+        version_label = ttk.Label(
+            self.sidebar,
+            text=f"V{APP_VERSION}",
+            foreground=sidebar_fg,
+            background=sidebar_bg,
+            font=("Segoe UI", 8)
+        )
+        version_label.pack(pady=(0, 10))
+
+    def _show_page(self, page_id: str) -> None:
+        """显示指定页面并隐藏其他页面"""
+        # 更新侧边栏按钮状态
+        for pid, button in self.nav_buttons.items():
+            if pid == page_id:
+                button.set_active(True)
+            else:
+                button.set_active(False)
+
+        # 隐藏所有页面
+        self.settings_page.pack_forget()
+        self.preview_page.pack_forget()
+        self.advanced_page.pack_forget()
+        self.about_page.pack_forget()
+
+        # 显示选中的页面
+        if page_id == "settings":
+            self.settings_page.pack(fill="both", expand=True)
+        elif page_id == "preview":
+            self.preview_page.pack(fill="both", expand=True)
+            # 如果有文件路径，更新文件列表
+            file_path = self.file_path_entry.get()
+            if file_path and os.path.isdir(file_path):
+                if self.file_listbox.size() == 0:
+                    self.update_file_list(file_path)
+                # 如果有文件且没有选择，则选择第一个
+                if self.file_listbox.size() > 0 and not self.file_listbox.curselection():
+                    self.file_listbox.selection_set(0)
+                    self.on_file_selected(None)
+        elif page_id == "advanced":
+            self.advanced_page.pack(fill="both", expand=True)
+        elif page_id == "about":
+            self.about_page.pack(fill="both", expand=True)
+
+        # 保存当前页面ID
+        self.current_page = page_id
+
+    def _create_settings_page(self) -> None:
+        """创建基本设置页面"""
+        self.settings_page = ttk.Frame(self.content_frame)
+
+        # 页面标题
+        title_frame = ttk.Frame(self.settings_page)
+        title_frame.pack(fill="x", padx=20, pady=(20, 10))
+
+        title = ttk.Label(title_frame, text="基本设置", style="Title.TLabel")
+        title.pack(side="left")
 
         # 路径设置区域
-        paths_frame = ModernFrame(self.settings_frame, title="路径设置")
-        paths_frame.pack(fill="x", padx=PADDING, pady=PADDING, anchor="n")
+        paths_frame = ttk.LabelFrame(self.settings_page, text="路径设置")
+        paths_frame.pack(fill="x", padx=20, pady=10)
 
         # 文件路径
         file_path_frame = ttk.Frame(paths_frame)
-        file_path_frame.pack(fill="x", padx=PADDING, pady=5)
+        file_path_frame.pack(fill="x", padx=10, pady=10)
 
-        file_path_label = ttk.Label(file_path_frame, text="图像文件路径:", font=NORMAL_FONT)
+        file_path_label = ttk.Label(file_path_frame, text="图像文件路径:")
         file_path_label.pack(side="top", anchor="w")
 
         file_path_entry_frame = ttk.Frame(file_path_frame)
-        file_path_entry_frame.pack(fill="x", pady=2)
+        file_path_entry_frame.pack(fill="x", pady=5)
 
-        self.file_path_entry = ttk.Entry(file_path_entry_frame, font=NORMAL_FONT)
+        self.file_path_entry = ttk.Entry(file_path_entry_frame)
         self.file_path_entry.pack(side="left", fill="x", expand=True)
 
         self.file_path_button = ttk.Button(
-            file_path_entry_frame, text="浏览", command=self.browse_file_path, width=BUTTON_WIDTH)
+            file_path_entry_frame, text="浏览", command=self.browse_file_path, width=8)
         self.file_path_button.pack(side="right", padx=(5, 0))
 
         # 保存路径
         save_path_frame = ttk.Frame(paths_frame)
-        save_path_frame.pack(fill="x", padx=PADDING, pady=5)
+        save_path_frame.pack(fill="x", padx=10, pady=10)
 
-        save_path_label = ttk.Label(save_path_frame, text="结果保存路径:", font=NORMAL_FONT)
+        save_path_label = ttk.Label(save_path_frame, text="结果保存路径:")
         save_path_label.pack(side="top", anchor="w")
 
         save_path_entry_frame = ttk.Frame(save_path_frame)
-        save_path_entry_frame.pack(fill="x", pady=2)
+        save_path_entry_frame.pack(fill="x", pady=5)
 
-        self.save_path_entry = ttk.Entry(save_path_entry_frame, font=NORMAL_FONT)
+        self.save_path_entry = ttk.Entry(save_path_entry_frame)
         self.save_path_entry.pack(side="left", fill="x", expand=True)
 
         self.save_path_button = ttk.Button(
-            save_path_entry_frame, text="浏览", command=self.browse_save_path, width=BUTTON_WIDTH)
+            save_path_entry_frame, text="浏览", command=self.browse_save_path, width=8)
         self.save_path_button.pack(side="right", padx=(5, 0))
 
         # 功能选项区域
-        options_frame = ModernFrame(self.settings_frame, title="功能选项")
-        options_frame.pack(fill="x", padx=PADDING, pady=PADDING, anchor="n")
+        options_frame = ttk.LabelFrame(self.settings_page, text="功能选项")
+        options_frame.pack(fill="x", padx=20, pady=10)
 
         # 创建选项
         self.save_detect_image_var = tk.BooleanVar(value=True)
         self.output_excel_var = tk.BooleanVar(value=True)
         self.copy_img_var = tk.BooleanVar(value=False)
-        self.use_fp16_var = tk.BooleanVar(value=False)  # 新增FP16加速选项
+        self.use_fp16_var = tk.BooleanVar(value=False)
 
         options_container = ttk.Frame(options_frame)
-        options_container.pack(fill="x", padx=PADDING, pady=PADDING)
+        options_container.pack(fill="x", padx=10, pady=10)
 
-        # 使用新的开关控件替代复选框
+        # 使用网格布局来组织选项
         save_detect_switch = ttk.Checkbutton(
-            options_container, text="保存探测结果图片", variable=self.save_detect_image_var,
-            style="Switch.TCheckbutton")
-        save_detect_switch.grid(row=0, column=0, sticky="w", pady=5)
+            options_container, text="保存探测结果图片", variable=self.save_detect_image_var)
+        save_detect_switch.grid(row=0, column=0, sticky="w", pady=5, padx=10)
 
         output_excel_switch = ttk.Checkbutton(
-            options_container, text="输出为Excel表格", variable=self.output_excel_var,
-            style="Switch.TCheckbutton")
-        output_excel_switch.grid(row=1, column=0, sticky="w", pady=5)
+            options_container, text="输出为Excel表格", variable=self.output_excel_var)
+        output_excel_switch.grid(row=1, column=0, sticky="w", pady=5, padx=10)
 
         copy_img_switch = ttk.Checkbutton(
-            options_container, text="按物种分类图片", variable=self.copy_img_var,
-            style="Switch.TCheckbutton")
-        copy_img_switch.grid(row=2, column=0, sticky="w", pady=5)
+            options_container, text="按物种分类图片", variable=self.copy_img_var)
+        copy_img_switch.grid(row=2, column=0, sticky="w", pady=5, padx=10)
 
-        # 选项卡2：图像预览
-        self.preview_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.preview_frame, text="图像预览")
+        # 处理控制区域 - 只在基本设置页面显示
+        process_frame = ttk.Frame(self.settings_page)
+        process_frame.pack(fill="x", padx=20, pady=20)
+
+        # 进度条和信息
+        self.progress_frame = SpeedProgressBar(process_frame)
+        self.progress_frame.pack(fill="x", pady=10)
+
+        # 开始处理按钮
+        self.start_stop_button = ttk.Button(
+            process_frame,
+            text="开始处理",
+            command=self.toggle_processing_state,
+            style="Process.TButton",
+            width=15)
+        self.start_stop_button.pack(side="right")
+
+    def _create_preview_page(self) -> None:
+        """创建图像预览页面"""
+        self.preview_page = ttk.Frame(self.content_frame)
+
+        # 页面标题
+        title_frame = ttk.Frame(self.preview_page)
+        title_frame.pack(fill="x", padx=20, pady=(20, 10))
+
+        title = ttk.Label(title_frame, text="图像预览", style="Title.TLabel")
+        title.pack(side="left")
 
         # 创建预览区域
-        preview_content = ttk.Frame(self.preview_frame)
-        preview_content.pack(fill="both", expand=True, padx=PADDING, pady=PADDING)
+        preview_content = ttk.Frame(self.preview_page)
+        preview_content.pack(fill="both", expand=True, padx=20, pady=10)
 
-        # 在左侧添加文件列表
+        # 左侧文件列表
         list_frame = ttk.LabelFrame(preview_content, text="图像文件")
-        list_frame.pack(side="left", fill="y", padx=(0, PADDING))
+        list_frame.pack(side="left", fill="y", padx=(0, 10))
 
         self.file_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT)
         self.file_listbox.pack(side="left", fill="both", expand=True)
@@ -259,107 +650,107 @@ class ObjectDetectionGUI:
         file_list_scrollbar.pack(side="right", fill="y")
         self.file_listbox.config(yscrollcommand=file_list_scrollbar.set)
 
-        # 添加预览图像区域
-        image_frame = ttk.LabelFrame(preview_content, text="图像预览")
-        image_frame.pack(side="right", fill="both", expand=True)
+        # 右侧预览区域
+        preview_right = ttk.Frame(preview_content)
+        preview_right.pack(side="right", fill="both", expand=True)
+
+        # 预览图像区域
+        image_frame = ttk.LabelFrame(preview_right, text="图像预览")
+        image_frame.pack(fill="both", expand=True, pady=(0, 10))
 
         self.image_label = ttk.Label(image_frame, text="请从左侧列表选择图像", anchor="center")
-        self.image_label.pack(fill="both", expand=True, padx=PADDING, pady=PADDING)
+        self.image_label.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # 为图像标签添加双击事件提示
-        image_hint = ttk.Label(image_frame, text="双击图像可放大查看", font=SMALL_FONT, foreground="gray")
-        image_hint.pack(side="bottom", fill="x", padx=PADDING, pady=(0, PADDING))
-
-        # 添加底部信息框
-        info_frame = ttk.LabelFrame(self.preview_frame, text="图像信息")
-        info_frame.pack(fill="x", padx=PADDING, pady=(0, PADDING))
+        # 添加图像信息区域
+        info_frame = ttk.LabelFrame(preview_right, text="图像信息")
+        info_frame.pack(fill="x", pady=(0, 10))
 
         self.info_text = tk.Text(info_frame, height=3, font=NORMAL_FONT, wrap="word")
         self.info_text.pack(fill="both", expand=True, padx=5, pady=5)
         self.info_text.config(state="disabled")
 
-        # 添加切换按钮
-        preview_controls = ttk.Frame(self.preview_frame)
-        preview_controls.pack(fill="x", padx=PADDING, pady=(PADDING, 0))
+        # 预览控制区域
+        control_frame = ttk.Frame(preview_right)
+        control_frame.pack(fill="x")
 
+        # 显示检测结果开关
         self.show_detection_var = tk.BooleanVar(value=False)
         show_detection_switch = ttk.Checkbutton(
-            preview_controls, text="显示检测结果", variable=self.show_detection_var,
-            style="Switch.TCheckbutton", command=self.toggle_detection_preview)
-        show_detection_switch.pack(side="left", padx=PADDING)
+            control_frame, text="显示检测结果", variable=self.show_detection_var,
+            command=self.toggle_detection_preview)
+        show_detection_switch.pack(side="left")
 
-        # 添加手动检测按钮
+        # 检测按钮
         self.detect_button = ttk.Button(
-            preview_controls, text="检测当前图像", command=self.detect_current_image, width=BUTTON_WIDTH)
-        self.detect_button.pack(side="right", padx=PADDING, pady=5)
+            control_frame, text="检测当前图像", command=self.detect_current_image, width=12)
+        self.detect_button.pack(side="right")
 
-        # 选项卡3：高级设置
-        self.advanced_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.advanced_frame, text="高级设置")
+    def _create_advanced_page(self) -> None:
+        """创建高级设置页面"""
+        self.advanced_page = ttk.Frame(self.content_frame)
 
-        # 创建高级设置内容 - 模型参数设置
-        advanced_content = ModernFrame(self.advanced_frame, title="模型参数设置")
-        advanced_content.pack(fill="x", padx=PADDING, pady=PADDING)
+        # 页面标题
+        title_frame = ttk.Frame(self.advanced_page)
+        title_frame.pack(fill="x", padx=20, pady=(20, 10))
 
-        # 创建参数设置框架
-        params_frame = ttk.Frame(advanced_content)
-        params_frame.pack(fill="x", padx=PADDING, pady=PADDING)
+        title = ttk.Label(title_frame, text="高级设置", style="Title.TLabel")
+        title.pack(side="left")
+
+        # 模型参数设置
+        params_frame = ttk.LabelFrame(self.advanced_page, text="模型参数设置")
+        params_frame.pack(fill="x", padx=20, pady=10)
+
+        # 参数内容框架
+        params_content = ttk.Frame(params_frame)
+        params_content.pack(fill="x", padx=10, pady=10)
 
         # 初始化模型参数变量
         self.iou_var = tk.DoubleVar(value=0.3)  # IOU阈值，默认0.3
         self.conf_var = tk.DoubleVar(value=0.25)  # 置信度阈值，默认0.25
-        self.use_fp16_var = tk.BooleanVar(value=False)  # FP16加速，默认开启
         self.use_augment_var = tk.BooleanVar(value=True)  # 数据增强，默认开启
         self.use_agnostic_nms_var = tk.BooleanVar(value=True)  # 类别无关NMS，默认开启
         self.current_path = None
 
-        # 创建参数控件 - 使用网格布局
-        params_frame.columnconfigure(0, weight=1)
-        params_frame.columnconfigure(1, weight=1)
-
-        row = 0
-
         # IOU阈值滑动条
-        ttk.Label(params_frame, text="IOU阈值:", font=NORMAL_FONT).grid(row=row, column=0, sticky="w", pady=(10, 0))
-        row += 1
+        ttk.Label(params_content, text="IOU阈值:").grid(row=0, column=0, sticky="w", pady=(10, 0))
 
-        iou_frame = ttk.Frame(params_frame)
-        iou_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 10))
+        iou_frame = ttk.Frame(params_content)
+        iou_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
         iou_scale = ttk.Scale(iou_frame, from_=0.1, to=0.9, orient="horizontal",
                               variable=self.iou_var, command=self._update_iou_label)
-        iou_scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        iou_scale.pack(side="left", fill="x", expand=True)
 
         self.iou_label = ttk.Label(iou_frame, text="0.30", width=4)
-        self.iou_label.pack(side="right")
-
-        row += 1
+        self.iou_label.pack(side="right", padx=(10, 0))
 
         # 置信度阈值滑动条
-        ttk.Label(params_frame, text="置信度阈值:", font=NORMAL_FONT).grid(row=row, column=0, sticky="w", pady=(10, 0))
-        row += 1
+        ttk.Label(params_content, text="置信度阈值:").grid(row=2, column=0, sticky="w", pady=(10, 0))
 
-        conf_frame = ttk.Frame(params_frame)
-        conf_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 10))
+        conf_frame = ttk.Frame(params_content)
+        conf_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(0, 10))
 
         conf_scale = ttk.Scale(conf_frame, from_=0.05, to=0.95, orient="horizontal",
                                variable=self.conf_var, command=self._update_conf_label)
-        conf_scale.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        conf_scale.pack(side="left", fill="x", expand=True)
 
         self.conf_label = ttk.Label(conf_frame, text="0.25", width=4)
-        self.conf_label.pack(side="right")
+        self.conf_label.pack(side="right", padx=(10, 0))
 
-        row += 1
+        # 模型优化选项
+        options_frame = ttk.LabelFrame(self.advanced_page, text="模型优化选项")
+        options_frame.pack(fill="x", padx=20, pady=10)
 
-        # 创建开关组
-        switches_frame = ttk.LabelFrame(params_frame, text="模型优化选项")
-        switches_frame.grid(row=row, column=0, columnspan=2, sticky="ew", pady=10)
+        options_content = ttk.Frame(options_frame)
+        options_content.pack(fill="x", padx=10, pady=10)
 
         # FP16加速
+        fp16_frame = ttk.Frame(options_content)
+        fp16_frame.pack(fill="x", pady=5)
+
         fp16_switch = ttk.Checkbutton(
-            switches_frame, text="使用FP16加速推理", variable=self.use_fp16_var,
-            style="Switch.TCheckbutton")
-        fp16_switch.pack(anchor="w", padx=10, pady=(10, 5))
+            fp16_frame, text="使用FP16加速推理", variable=self.use_fp16_var)
+        fp16_switch.pack(anchor="w")
 
         # 如果CUDA不可用，禁用FP16开关
         if not self.cuda_available:
@@ -367,118 +758,118 @@ class ObjectDetectionGUI:
             self.use_fp16_var.set(False)
 
         fp16_desc = ttk.Label(
-            switches_frame,
+            fp16_frame,
             text="减少内存使用并提高速度，可能略微降低精度",
             font=SMALL_FONT,
             foreground="gray")
-        fp16_desc.pack(anchor="w", padx=30, pady=(0, 10))
+        fp16_desc.pack(anchor="w", padx=25, pady=(0, 5))
 
         # 数据增强
+        augment_frame = ttk.Frame(options_content)
+        augment_frame.pack(fill="x", pady=5)
+
         augment_switch = ttk.Checkbutton(
-            switches_frame, text="使用数据增强", variable=self.use_augment_var,
-            style="Switch.TCheckbutton")
-        augment_switch.pack(anchor="w", padx=10, pady=(5, 5))
+            augment_frame, text="使用数据增强", variable=self.use_augment_var)
+        augment_switch.pack(anchor="w")
 
         augment_desc = ttk.Label(
-            switches_frame,
+            augment_frame,
             text="通过测试时增强提高检测准确性，但会降低速度",
             font=SMALL_FONT,
             foreground="gray")
-        augment_desc.pack(anchor="w", padx=30, pady=(0, 10))
+        augment_desc.pack(anchor="w", padx=25, pady=(0, 5))
 
         # 类别无关NMS
+        nms_frame = ttk.Frame(options_content)
+        nms_frame.pack(fill="x", pady=5)
+
         agnostic_nms_switch = ttk.Checkbutton(
-            switches_frame, text="使用类别无关NMS", variable=self.use_agnostic_nms_var,
-            style="Switch.TCheckbutton")
-        agnostic_nms_switch.pack(anchor="w", padx=10, pady=(5, 5))
+            nms_frame, text="使用类别无关NMS", variable=self.use_agnostic_nms_var)
+        agnostic_nms_switch.pack(anchor="w")
 
         agnostic_nms_desc = ttk.Label(
-            switches_frame,
+            nms_frame,
             text="忽略类别信息进行非极大值抑制，对多类别场景有优势",
             font=SMALL_FONT,
             foreground="gray")
-        agnostic_nms_desc.pack(anchor="w", padx=30, pady=(0, 10))
+        agnostic_nms_desc.pack(anchor="w", padx=25, pady=(0, 5))
 
-        # 添加按钮框架 - 按钮并排放置
-        buttons_frame = ttk.Frame(self.advanced_frame)
-        buttons_frame.pack(fill="x", padx=PADDING, pady=PADDING)
+        # 按钮区域
+        buttons_frame = ttk.Frame(self.advanced_page)
+        buttons_frame.pack(fill="x", padx=20, pady=10)
 
-        # 查看参数说明按钮 (左侧)
+        # 查看参数说明按钮
         help_button = ttk.Button(
-            buttons_frame, text="查看参数说明", command=self.show_params_help, width=BUTTON_WIDTH)
-        help_button.pack(side="left", padx=(0, 5))
+            buttons_frame, text="查看参数说明", command=self.show_params_help, width=12)
+        help_button.pack(side="left")
 
-        # 恢复默认参数按钮 (右侧)
+        # 恢复默认参数按钮
         reset_button = ttk.Button(
-            buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=BUTTON_WIDTH)
+            buttons_frame, text="恢复默认参数", command=self._reset_model_params, width=12)
         reset_button.pack(side="right")
 
-        # 选项卡4：关于
-        self.about_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.about_frame, text="关于")
+    def _update_iou_label(self, value) -> None:
+        """更新IOU标签显示"""
+        self.iou_label.config(text=f"{float(value):.2f}")
 
-        about_content = ttk.Frame(self.about_frame)
-        about_content.pack(fill="both", expand=True, padx=PADDING*2, pady=PADDING*2)
+    def _update_conf_label(self, value) -> None:
+        """更新置信度标签显示"""
+        self.conf_label.config(text=f"{float(value):.2f}")
 
-        # 应用标志
+    def _create_about_page(self) -> None:
+        """创建关于页面"""
+        self.about_page = ttk.Frame(self.content_frame)
+
+        # 页面标题
+        title_frame = ttk.Frame(self.about_page)
+        title_frame.pack(fill="x", padx=20, pady=(20, 10))
+
+        title = ttk.Label(title_frame, text="关于", style="Title.TLabel")
+        title.pack(side="left")
+
+        # 关于内容
+        about_content = ttk.Frame(self.about_page)
+        about_content.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # 应用Logo
         try:
             logo_path = resource_path(os.path.join("res", "logo.png"))
             logo_img = Image.open(logo_path)
-            logo_img = logo_img.resize((100, 100), Image.LANCZOS)
+            logo_img = logo_img.resize((120, 120), Image.LANCZOS)
             logo_photo = ImageTk.PhotoImage(logo_img)
             logo_label = ttk.Label(about_content, image=logo_photo)
             logo_label.image = logo_photo  # 保持引用
-            logo_label.pack(pady=(0, PADDING))
+            logo_label.pack(pady=(20, 10))
         except Exception:
             # 如果没有图标，显示文本标题
             logo_label = ttk.Label(about_content, text=APP_TITLE, font=('Segoe UI', 18, 'bold'))
-            logo_label.pack(pady=(0, PADDING))
+            logo_label.pack(pady=(20, 10))
+
+        # 应用名称
+        app_name = ttk.Label(about_content, text="物种信息检测系统", font=("Segoe UI", 16, "bold"))
+        app_name.pack(pady=5)
+
+        # 版本信息
+        version_label = ttk.Label(about_content, text=f"版本: {APP_VERSION}", font=NORMAL_FONT)
+        version_label.pack(pady=5)
 
         # 应用描述
         desc_label = ttk.Label(
             about_content,
             text="一款高效的物种信息检测应用程序，支持图像物种识别、探测图片保存、Excel输出和图像分类功能。",
             font=NORMAL_FONT,
-            wraplength=400,
+            wraplength=500,
             justify="center"
         )
-        desc_label.pack(pady=PADDING)
+        desc_label.pack(pady=15)
 
-        # 版本信息
-        version_label = ttk.Label(
-            about_content,
-            text=f"版本: {APP_VERSION}",
-            font=NORMAL_FONT
-        )
-        version_label.pack(pady=(0, PADDING*2))
+        # 作者信息
+        author_label = ttk.Label(about_content, text="作者：和錦わきん", font=NORMAL_FONT)
+        author_label.pack(pady=5)
 
-        # 当前用户
-        user_label = ttk.Label(
-            about_content,
-            text="作者：和錦わきん",
-            font=SMALL_FONT
-        )
-        user_label.pack()
-
-        # 底部控制区域
-        control_frame = ttk.Frame(self.master)
-        control_frame.grid(row=2, column=0, sticky="ew", padx=PADDING, pady=(0, PADDING))
-
-        # 进度条和信息
-        self.progress_frame = SpeedProgressBar(control_frame)
-        self.progress_frame.pack(fill="x", pady=(0, PADDING))
-
-        # 控制按钮
-        buttons_frame = ttk.Frame(control_frame)
-        buttons_frame.pack(fill="x")
-
-        self.start_stop_button = ttk.Button(
-            buttons_frame, text="开始处理", command=self.toggle_processing_state, width=BUTTON_WIDTH)
-        self.start_stop_button.pack(side="right", padx=(5, 0))
-
-        # 底部状态栏
-        self.status_bar = InfoBar(self.master)
-        self.status_bar.grid(row=3, column=0, sticky="ew")
+        # 版权信息
+        copyright_label = ttk.Label(about_content, text="© 2024 版权所有", font=SMALL_FONT)
+        copyright_label.pack(pady=(20, 0))
 
     def show_params_help(self) -> None:
         """显示参数说明弹窗"""
@@ -599,9 +990,6 @@ FP16加速 (半精度浮点数加速)
 
         # 绑定图像标签的双击事件
         self.image_label.bind("<Double-1>", self.on_image_double_click)
-
-        # 添加选项卡切换事件
-        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
         # 添加显示检测结果开关的变量跟踪
         self.show_detection_var.trace("w", self._detection_switch_changed)
@@ -907,9 +1295,13 @@ FP16加速 (半精度浮点数加速)
         zoom_window.transient(self.master)  # 设置为主窗口的临时窗口
 
     def on_tab_changed(self, event) -> None:
-        """处理选项卡切换事件"""
-        # 如果切换到预览选项卡
-        if self.notebook.index(self.notebook.select()) == 1:
+        """处理选项卡切换事件 - 修改为适应新的布局"""
+        # 这里应该获取当前显示的是哪个标签页
+        current_tab = event.widget.select()
+        tab_id = event.widget.index(current_tab)
+
+        # 如果当前是图像预览标签页
+        if current_tab == self.image_preview_tab:
             # 确保文件列表已更新
             file_path = self.file_path_entry.get()
             if file_path and os.path.isdir(file_path):
@@ -1050,11 +1442,6 @@ FP16加速 (半精度浮点数加速)
             self.file_path_entry.delete(0, tk.END)
             self.file_path_entry.insert(0, folder_selected)
             self.update_file_list(folder_selected)
-
-            # 如果当前在预览选项卡，自动选择第一个文件
-            if self.notebook.index(self.notebook.select()) == 1 and self.file_listbox.size() > 0:
-                self.file_listbox.selection_set(0)
-                self.on_file_selected(None)
 
     def browse_save_path(self) -> None:
         """浏览保存路径"""
@@ -1486,22 +1873,26 @@ FP16加速 (半精度浮点数加速)
                            self.save_path_entry, self.save_path_button):
                 widget["state"] = "disabled"
 
-            # 禁用"检测当前图像"按钮
+            # 当前不在预览页面，则切换到预览页面
+            if self.current_page != "preview":
+                self._show_page("preview")
+
+            # 禁用侧边栏按钮（除了预览页面）
+            for page_id, button in self.nav_buttons.items():
+                if page_id != "preview":
+                    button["state"] = "disabled"
+
+            # 禁用检测按钮
             self.detect_button["state"] = "disabled"
 
-            # 自动打开"显示检测结果"开关
+            # 自动打开显示检测结果开关
             self.show_detection_var.set(True)
-
-            # 禁用选项卡
-            self.notebook.tab(0, state="disabled")
-            self.notebook.tab(2, state="disabled")
-            self.notebook.tab(3, state="disabled")
         else:
             self.start_stop_button.config(text="开始处理")
             self.progress_frame.speed_label.config(text="")
             self.progress_frame.time_label.config(text="")
 
-            # 更新状态栏文本，表明处理已停止
+            # 更新状态栏文本
             if self.processing_stop_flag.is_set():
                 self.status_bar.status_label.config(text="处理已停止")
             else:
@@ -1512,13 +1903,12 @@ FP16加速 (半精度浮点数加速)
                            self.save_path_entry, self.save_path_button):
                 widget["state"] = "normal"
 
-            # 重新启用"检测当前图像"按钮
-            self.detect_button["state"] = "normal"
+            # 启用侧边栏按钮
+            for button in self.nav_buttons.values():
+                button["state"] = "normal"
 
-            # 启用选项卡
-            self.notebook.tab(0, state="normal")
-            self.notebook.tab(2, state="normal")
-            self.notebook.tab(3, state="normal")
+            # 启用检测按钮
+            self.detect_button["state"] = "normal"
 
     def _process_images_thread(self, file_path: str, save_path: str,
                                save_detect_image: bool, output_excel: bool,
