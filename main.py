@@ -13,6 +13,20 @@ from tkinter import ttk, messagebox
 
 # 自动安装依赖
 def install_requirements():
+    # 首先安装setuptools，这是许多其他包的依赖
+    print("检查setuptools是否已安装...")
+    try:
+        import setuptools
+        print("setuptools已安装.")
+    except ImportError:
+        print("setuptools未安装，正在自动安装...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools"])
+            print("setuptools安装完成.")
+        except Exception as e:
+            print(f"setuptools安装失败：{e}\n请手动运行 pip install setuptools")
+            sys.exit(1)
+
     req_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
     if not os.path.exists(req_path):
         print("未发现 requirements.txt，跳过依赖检查。")

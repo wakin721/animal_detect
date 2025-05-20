@@ -258,7 +258,7 @@ class SpeedProgressBar(ttk.Frame):
 
 
 class CollapsiblePanel(ttk.Frame):
-    """现代化可折叠面板组件 - 修复版"""
+    """现代化可折叠面板组件 - 针对滑块组件特别优化"""
 
     def __init__(self, parent, title, subtitle="", icon=None, **kwargs):
         """初始化可折叠面板
@@ -275,23 +275,40 @@ class CollapsiblePanel(ttk.Frame):
         self.toggle_callbacks = []  # 用于存储切换状态的回调函数
 
         # 创建自定义样式
-        style = ttk.Style()
+        self.style = ttk.Style()
 
-        # 确保使用正确的背景颜色
-        if style.theme_use() == "sun-valley-dark" or getattr(self, 'is_dark_mode', False):
+        # 判断当前主题是否是深色主题
+        current_theme = self.style.theme_use()
+        self.is_dark_mode = (current_theme == "dark" or current_theme == "sun-valley-dark" or
+                             getattr(parent, 'is_dark_mode', False))
+
+        # 根据深色模式设置默认颜色
+        if self.is_dark_mode:
             self.bg_color = "#2b2b2b"
             self.header_bg = "#333333"
             self.text_color = "#ffffff"
             self.hover_color = "#3a3a3a"
+            self.trough_color = "#505050"  # 深色模式滑槽颜色
         else:
             self.bg_color = "#f5f5f5"
             self.header_bg = "#e5e5e5"
             self.text_color = "#000000"
             self.hover_color = "#e0e0e0"
+            self.trough_color = "#d0d0d0"  # 浅色模式滑槽颜色
 
-        # 配置整个面板
-        self.configure(style="Panel.TFrame")
-        style.configure("Panel.TFrame", background=self.bg_color)
+        # 尝试从父窗口递归获取背景色，确保与应用程序整体风格一致
+        self._inherit_background_color()
+
+        # 生成唯一ID作为样式前缀，避免样式冲突
+        self.uid = str(id(self))[-6:]
+
+        # 配置整个面板的样式
+        panel_style = f"Panel_{self.uid}.TFrame"
+        self.style.configure(panel_style, background=self.bg_color)
+        self.configure(style=panel_style)
+
+        # 创建并应用基于当前背景色的样式
+        self._configure_widget_styles()
 
         # 头部框架
         self.header_frame = tk.Frame(self, bg=self.header_bg, cursor="hand2")
@@ -311,7 +328,6 @@ class CollapsiblePanel(ttk.Frame):
                 self.icon_label.pack(side="left", padx=(15, 10), pady=12)
             except Exception as e:
                 logger.error(f"加载图标失败: {e}")
-                # 如果加载失败，不显示图标
 
         # 标题框架（含标题和副标题）
         title_container = tk.Frame(self.header_frame, bg=self.header_bg)
@@ -337,14 +353,12 @@ class CollapsiblePanel(ttk.Frame):
                                       bg=self.header_bg, fg=self.text_color)
         self.toggle_button.pack(side="right", padx=(0, 15), pady=10)
 
-        # 内容区域
-        self.content_frame = ttk.Frame(self, style="Content.TFrame")
-        style.configure("Content.TFrame", background=self.bg_color, relief="flat")
+        # 内容区域 - 使用自定义样式
+        self.content_frame = ttk.Frame(self, style=f"Content_{self.uid}.TFrame")
         self.content_frame.pack_forget()  # 初始隐藏
 
-        # 内容区域的内边距容器
-        self.content_padding = ttk.Frame(self.content_frame, style="ContentPadding.TFrame")
-        style.configure("ContentPadding.TFrame", background=self.bg_color)
+        # 内容区域的内边距容器 - 使用同样的样式
+        self.content_padding = ttk.Frame(self.content_frame, style=f"Content_{self.uid}.TFrame")
         self.content_padding.pack(fill="both", expand=True, padx=20, pady=(10, 20))
 
         # 绑定点击事件
@@ -358,10 +372,168 @@ class CollapsiblePanel(ttk.Frame):
         self.header_frame.bind("<Enter>", self._on_header_enter)
         self.header_frame.bind("<Leave>", self._on_header_leave)
 
+    def _inherit_background_color(self):
+        """递归从父窗口获取背景色"""
+        try:
+            # 先检查是否有is_dark_mode属性，确定整体模式
+            parent = self.parent
+            while parent:
+                if hasattr(parent, 'is_dark_mode'):
+                    self.is_dark_mode = parent.is_dark_mode
+                    break
+                if hasattr(parent, 'master') and parent.master:
+                    parent = parent.master
+                else:
+                    break
+
+            # 尝试获取实际的背景颜色
+            parent = self.parent
+            while parent:
+                try:
+                    # 尝试直接获取背景色
+                    if hasattr(parent, 'cget'):
+                        bg = parent.cget('background')
+                        if bg and bg not in ('', 'SystemButtonFace'):
+                            self.bg_color = bg
+                            return
+
+                    # 检查特殊属性
+                    for attr_name in ['bg_color', 'background', 'bg', 'sidebar_bg']:
+                        if hasattr(parent, attr_name):
+                            attr_val = getattr(parent, attr_name)
+                            if isinstance(attr_val, str):
+                                self.bg_color = attr_val
+                                return
+
+                    # 特别处理高级设置中的字段
+                    advanced_fields = [
+                        'advanced_page', 'model_params_tab', 'params_content_frame',
+                        'threshold_panel', 'accel_panel', 'advanced_detect_panel'
+                    ]
+
+                    for field_name in advanced_fields:
+                        if hasattr(parent, field_name):
+                            field = getattr(parent, field_name)
+                            if hasattr(field, 'cget'):
+                                bg = field.cget('background')
+                                if bg and bg not in ('', 'SystemButtonFace'):
+                                    self.bg_color = bg
+                                    return
+                except Exception:
+                    pass
+
+                # 继续向上查找
+                if hasattr(parent, 'master') and parent.master:
+                    parent = parent.master
+                else:
+                    break
+
+            # 根据深色模式使用默认背景色
+            if self.is_dark_mode:
+                self.bg_color = "#2b2b2b"
+            else:
+                self.bg_color = "#f5f5f5"
+        except Exception:
+            pass  # 如果获取失败，使用默认背景色
+
+    def _configure_widget_styles(self):
+        """为各种组件配置基于当前背景色的样式"""
+        # Frame样式
+        self.style.configure(f"Content_{self.uid}.TFrame", background=self.bg_color)
+
+        # Label样式
+        self.style.configure(f"Label_{self.uid}.TLabel",
+                             background=self.bg_color,
+                             foreground=self.text_color)
+
+        # 参数标签专用样式
+        self.style.configure(f"ParamLabel_{self.uid}.TLabel",
+                             background=self.bg_color,
+                             foreground=self.text_color)
+
+        # 复选框样式
+        self.style.configure(f"Check_{self.uid}.TCheckbutton",
+                             background=self.bg_color,
+                             foreground=self.text_color)
+
+        self.style.map(f"Check_{self.uid}.TCheckbutton",
+                       background=[('active', self.bg_color),
+                                   ('disabled', self.bg_color),
+                                   ('selected', self.bg_color),
+                                   ('!disabled', self.bg_color)],
+                       foreground=[('active', self.text_color),
+                                   ('disabled', self.text_color),
+                                   ('selected', self.text_color)])
+
+        # 单选框样式
+        self.style.configure(f"Radio_{self.uid}.TRadiobutton",
+                             background=self.bg_color,
+                             foreground=self.text_color)
+
+        self.style.map(f"Radio_{self.uid}.TRadiobutton",
+                       background=[('active', self.bg_color),
+                                   ('disabled', self.bg_color),
+                                   ('selected', self.bg_color),
+                                   ('!disabled', self.bg_color)],
+                       foreground=[('active', self.text_color),
+                                   ('disabled', self.text_color),
+                                   ('selected', self.text_color)])
+
+        # 滑块样式 - 特别处理
+        try:
+            # 先删除所有同名样式，避免样式累积叠加问题
+            for state in ['', 'active', 'disabled', 'selected', 'focus', 'pressed', 'alternate']:
+                try:
+                    self.style.map(f"Scale_{self.uid}.Horizontal.TScale",
+                                   background=[(state, None)])
+                except:
+                    pass
+
+            # 重新创建样式
+            self.style.configure(f"Scale_{self.uid}.Horizontal.TScale",
+                                 background=self.bg_color,
+                                 troughcolor=self.trough_color)
+
+            # 确保在所有状态下背景一致
+            states = ['active', 'disabled', 'selected', 'focus', '!disabled', 'pressed', 'alternate']
+            for state in states:
+                self.style.map(f"Scale_{self.uid}.Horizontal.TScale",
+                               background=[(state, self.bg_color)])
+
+            # 重写滑块的element布局，尝试更精确控制
+            self.style.layout(f"Scale_{self.uid}.Horizontal.TScale", [
+                ('Horizontal.Scale.trough', {
+                    'sticky': 'nswe',
+                    'children': [
+                        ('Horizontal.Scale.track', {'sticky': 'nswe'}),
+                        ('Horizontal.Scale.slider', {'side': 'left', 'sticky': ''})
+                    ]
+                })
+            ])
+
+            # 直接配置滑块中的实际元素
+            self.style.element_create(f"SliderBg_{self.uid}", "from", "default")
+            self.style.configure(f"Scale_{self.uid}.Horizontal.TScale",
+                                 troughcolor=self.trough_color)
+
+            # 重写垂直滑块样式
+            self.style.configure(f"Scale_{self.uid}.Vertical.TScale",
+                                 background=self.bg_color,
+                                 troughcolor=self.trough_color)
+            for state in states:
+                self.style.map(f"Scale_{self.uid}.Vertical.TScale",
+                               background=[(state, self.bg_color)])
+        except Exception as e:
+            logger.debug(f"滑块样式配置失败: {str(e)}")
+
+        # 下拉框样式
+        self.style.configure(f"Combo_{self.uid}.TCombobox",
+                             background=self.bg_color,
+                             fieldbackground=self.bg_color,
+                             foreground=self.text_color)
+
     def toggle(self, event=None):
         """切换展开/折叠状态"""
-        was_expanded = self.is_expanded
-
         if self.is_expanded:
             self.collapse()
         else:
@@ -382,6 +554,18 @@ class CollapsiblePanel(ttk.Frame):
         self.toggle_button.configure(text="▲")
         self.is_expanded = True
 
+        # 使用多段延迟确保UI组件完全渲染后应用样式
+        self.master.update_idletasks()
+
+        # 立即应用一次样式
+        self._apply_styles_to_all_children()
+
+        # 然后用延迟序列确保完全应用
+        self.after(50, self._apply_styles_to_all_children)
+        self.after(100, self._apply_styles_to_all_children)
+        # 最后一次延迟较长，处理可能的动画完成后
+        self.after(300, self._apply_styles_to_all_children)
+
     def collapse(self):
         """折叠面板"""
         if not self.is_expanded:
@@ -392,65 +576,200 @@ class CollapsiblePanel(ttk.Frame):
         self.is_expanded = False
 
     def add_widget(self, widget):
-        """向内容区添加控件并设置背景色
-
-        Args:
-            widget: 要添加的控件
-        """
+        """向内容区添加控件并设置背景色"""
         widget.pack(in_=self.content_padding, fill="x", pady=5)
+        # 立即应用样式到新添加的组件
+        self._apply_style_to_widget(widget)
 
-        # 设置添加的组件背景色
-        self._set_widget_bg(widget)
+    def _apply_styles_to_all_children(self):
+        """递归应用样式到所有子控件"""
+        # 应用到内容框架本身
+        self._force_set_background(self.content_frame, self.bg_color)
+        self._force_set_background(self.content_padding, self.bg_color)
 
-    def _set_widget_bg(self, widget):
-        """为组件设置正确的背景色
+        # 特别处理 - 寻找并修复面板中的所有滑块组件及其容器框架
+        self._find_and_fix_all_scales(self.content_padding)
 
-        Args:
-            widget: 要设置背景色的组件
-        """
-        # 检查组件类型并设置合适的背景色
+        # 应用到所有子控件
+        for child in self.content_padding.winfo_children():
+            self._apply_style_to_widget(child, force_bg=True)
+
+    def _find_and_fix_all_scales(self, parent_widget):
+        """特别寻找并修复所有滑块组件及其相关组件"""
         try:
-            # 对于tk.Frame, tk.Label等支持bg属性的组件
-            if hasattr(widget, 'configure') and 'bg' in widget.configure():
-                widget.configure(bg=self.bg_color)
+            # 查找所有ttk.Scale组件
+            scales = []
 
-            # 对于ttk组件，尝试使用style设置
-            elif isinstance(widget, ttk.Widget):
-                widget_class = widget.winfo_class()
-                widget_name = widget.winfo_name()
-                style_name = f"{widget_name}.{widget_class}"
-
-                style = ttk.Style()
+            def _find_scales(widget):
                 try:
-                    # 为不同类型的ttk组件创建适当的样式
-                    if widget_class == "TFrame" or widget_class == "TLabelframe":
-                        style.configure(style_name, background=self.bg_color)
-                    elif widget_class == "TLabel":
-                        style.configure(style_name, background=self.bg_color)
-                    elif widget_class == "TButton" or widget_class == "TCheckbutton" or widget_class == "TRadiobutton":
-                        style.map(style_name, background=[('active', self.bg_color)])
-                        style.configure(style_name, background=self.bg_color)
-
-                    # 应用样式
-                    widget.configure(style=style_name)
-                except tk.TclError:
-                    # 有些ttk组件可能不支持某些样式选项
+                    if hasattr(widget, 'winfo_children'):
+                        for child in widget.winfo_children():
+                            if isinstance(child, ttk.Scale) or (
+                                    hasattr(child, 'winfo_class') and 'Scale' in child.winfo_class()):
+                                scales.append(child)
+                            _find_scales(child)
+                except:
                     pass
+
+            # 开始递归查找
+            _find_scales(parent_widget)
+
+            # 对找到的每个滑块应用专用样式
+            for scale in scales:
+                try:
+                    # 获取组件类型
+                    widget_class = scale.winfo_class()
+
+                    # 应用水平或垂直滑块样式
+                    if "Horizontal" in widget_class:
+                        scale.configure(style=f"Scale_{self.uid}.Horizontal.TScale")
+                    else:
+                        scale.configure(style=f"Scale_{self.uid}.Vertical.TScale")
+
+                    # 强制设置背景色
+                    self._force_set_background(scale, self.bg_color)
+
+                    # 特别处理滑块的父容器
+                    parent = scale.master
+                    if parent:
+                        self._force_set_background(parent, self.bg_color)
+
+                        # 处理同级组件（特别是标签）
+                        for sibling in parent.winfo_children():
+                            if isinstance(sibling, ttk.Label) or (
+                                    hasattr(sibling, 'winfo_class') and sibling.winfo_class() == "TLabel"):
+                                sibling.configure(style=f"ParamLabel_{self.uid}.TLabel")
+                                self._force_set_background(sibling, self.bg_color)
+                            elif isinstance(sibling, tk.Label):
+                                sibling.configure(bg=self.bg_color, fg=self.text_color)
+                except Exception as e:
+                    logger.debug(f"修复滑块样式失败: {str(e)}")
+        except Exception as e:
+            logger.debug(f"查找滑块组件失败: {str(e)}")
+
+    def _force_set_background(self, widget, color):
+        """强制设置组件背景色，无视组件类型"""
+        try:
+            # 尝试各种可能的背景色设置方法
+            if hasattr(widget, 'configure'):
+                try:
+                    if 'background' in widget.config():
+                        widget.configure(background=color)
+                    if 'bg' in widget.config():
+                        widget.configure(bg=color)
+                except:
+                    pass
+
+            # 对于ttk.Frame特别处理
+            if isinstance(widget, ttk.Frame):
+                style_name = f"Custom_{id(widget)}.TFrame"
+                self.style.configure(style_name, background=color)
+                try:
+                    widget.configure(style=style_name)
+                except:
+                    pass
+
+            # 对于ttk.Scale特别处理
+            if isinstance(widget, ttk.Scale):
+                try:
+                    # 获取组件类型
+                    widget_class = widget.winfo_class()
+
+                    # 创建并应用自定义样式
+                    style_name = f"Custom_{id(widget)}"
+                    if "Horizontal" in widget_class:
+                        self.style.configure(f"{style_name}.Horizontal.TScale",
+                                             background=color,
+                                             troughcolor=self.trough_color)
+                        widget.configure(style=f"{style_name}.Horizontal.TScale")
+                    elif "Vertical" in widget_class:
+                        self.style.configure(f"{style_name}.Vertical.TScale",
+                                             background=color,
+                                             troughcolor=self.trough_color)
+                        widget.configure(style=f"{style_name}.Vertical.TScale")
+                except:
+                    pass
+        except:
+            pass
+
+    def _apply_style_to_widget(self, widget, force_bg=False):
+        """为单个组件应用正确的样式"""
+        try:
+            # 处理tk原生组件
+            if not isinstance(widget, ttk.Widget):
+                if hasattr(widget, 'configure'):
+                    # 强制设置背景色
+                    if 'background' in widget.config():
+                        widget.configure(background=self.bg_color)
+                    elif 'bg' in widget.config():
+                        widget.configure(bg=self.bg_color)
+
+                    # 对于tk.Label和相似组件，同时设置文字颜色
+                    if widget.__class__.__name__ in ['Label', 'Message', 'Text'] and 'fg' in widget.config():
+                        widget.configure(fg=self.text_color)
+
+                    # 对于tk.Frame特殊处理
+                    if widget.__class__.__name__ == 'Frame':
+                        # 强制将Frame的所有子控件背景设为相同颜色
+                        for child in widget.winfo_children():
+                            self._apply_style_to_widget(child, force_bg=True)
+
+            # 特别处理ttk组件
+            else:
+                # 获取具体的widget类名
+                widget_class = widget.winfo_class()
+
+                # 特殊处理框架容器
+                if widget_class == "TFrame" or widget_class == "TLabelframe":
+                    widget.configure(style=f"Content_{self.uid}.TFrame")
+
+                    # 对于Frame，特别检查是否包含滑块和标签
+                    self._find_and_fix_all_scales(widget)
+
+                    # 递归处理所有子组件
+                    for child in widget.winfo_children():
+                        self._apply_style_to_widget(child, force_bg=True)
+
+                # 特殊处理标签组件，应用专用样式
+                elif widget_class == "TLabel":
+                    widget.configure(style=f"ParamLabel_{self.uid}.TLabel")
+
+                # 特殊处理滑块组件
+                elif widget_class == "TScale" or "Scale" in widget_class:
+                    # 水平滑块
+                    if "Horizontal" in widget_class:
+                        style_name = f"Scale_{self.uid}.Horizontal.TScale"
+                        widget.configure(style=style_name)
+                    # 垂直滑块
+                    elif "Vertical" in widget_class:
+                        style_name = f"Scale_{self.uid}.Vertical.TScale"
+                        widget.configure(style=style_name)
+                    # 默认水平滑块
+                    else:
+                        style_name = f"Scale_{self.uid}.Horizontal.TScale"
+                        widget.configure(style=style_name)
+
+                # 处理其他ttk组件
+                elif widget_class == "TCheckbutton":
+                    widget.configure(style=f"Check_{self.uid}.TCheckbutton")
+                elif widget_class == "TRadiobutton":
+                    widget.configure(style=f"Radio_{self.uid}.TRadiobutton")
+                elif widget_class == "TCombobox":
+                    widget.configure(style=f"Combo_{self.uid}.TCombobox")
+
+                # 强制设置背景色（如果需要）
+                if force_bg:
+                    self._force_set_background(widget, self.bg_color)
 
             # 递归处理子组件
             for child in widget.winfo_children():
-                self._set_widget_bg(child)
+                self._apply_style_to_widget(child, force_bg=force_bg)
 
         except Exception as e:
-            # 如果设置背景色失败，记录但不影响程序运行
-            logger.debug(f"设置组件背景色失败: {str(e)}")
+            logger.debug(f"应用样式失败: {str(e)}")
 
     def bind_toggle_callback(self, callback):
-        """绑定切换状态的回调函数
-
-        Args:
-            callback: 回调函数，接收两个参数：面板对象和展开状态(True/False)
-        """
+        """绑定切换状态的回调函数"""
         if callback not in self.toggle_callbacks:
             self.toggle_callbacks.append(callback)
 

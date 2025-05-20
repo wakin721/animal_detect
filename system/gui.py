@@ -913,15 +913,43 @@ class ObjectDetectionGUI:
         if os.path.exists(json_path):
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
-                    detection_data = json.load(f)
+                    detection_info = json.load(f)
+
+                # 构建检测信息并更新显示
+                species_info = {
+                    '物种名称': detection_info.get('物种名称', ''),
+                    '物种数量': detection_info.get('物种数量', ''),
+                    '最低置信度': detection_info.get('最低置信度', ''),
+                    '检测时间': detection_info.get('检测时间', '')
+                }
 
                 # 显示检测信息
+                # 创建信息文本
                 info_text = f"文件名: {file_name}\n"
-                info_text += f"物种: {', '.join(detection_data.get('物种名称', ['未检测到']))}\n"
-                info_text += f"置信度: {', '.join([f'{conf:.2f}' for conf in detection_data.get('置信度', [])])}\n"
-                info_text += f"数量: {detection_data.get('数量', 0)}"
+
+                # 添加物种信息
+                if species_info['物种名称']:
+                    species_names = species_info['物种名称'].split(',')
+                    species_counts = species_info['物种数量'].split(',')
+
+                    species_text = []
+                    for i, (name, count) in enumerate(zip(species_names, species_counts)):
+                        species_text.append(f"{name}: {count}只")
+
+                    info_text += f"物种: {', '.join(species_text)}\n"
+                else:
+                    info_text += "物种: 未检测到\n"
+
+                # 添加置信度信息
+                if species_info['最低置信度']:
+                    info_text += f"最低置信度: {species_info['最低置信度']}\n"
+
+                # 添加检测时间
+                if species_info['检测时间']:
+                    info_text += f"检测时间: {species_info['检测时间']}"
 
                 self.validation_info_text.insert(tk.END, info_text)
+
             except Exception as e:
                 self.validation_info_text.insert(tk.END, f"无法加载检测数据: {str(e)}")
         else:
