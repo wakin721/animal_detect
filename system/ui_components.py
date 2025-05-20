@@ -256,6 +256,7 @@ class SpeedProgressBar(ttk.Frame):
         self.time_label = ttk.Label(self.info_frame, text="", width=15)
         self.time_label.pack(side="bottom", anchor="e")
 
+
 class CollapsiblePanel(ttk.Frame):
     """现代化可折叠面板组件 - 修复版"""
 
@@ -391,34 +392,58 @@ class CollapsiblePanel(ttk.Frame):
         self.is_expanded = False
 
     def add_widget(self, widget):
-        """向内容区添加控件
+        """向内容区添加控件并设置背景色
 
         Args:
             widget: 要添加的控件
         """
         widget.pack(in_=self.content_padding, fill="x", pady=5)
 
-    def _on_header_enter(self, event):
-        """鼠标进入标题区域时的效果"""
-        self.header_frame.config(bg=self.hover_color)
-        self.title_label.config(bg=self.hover_color)
-        if hasattr(self, 'subtitle_label'):
-            self.subtitle_label.config(bg=self.hover_color)
-        if self.icon_label:
-            self.icon_label.config(bg=self.hover_color)
-        # 更新折叠按钮背景色
-        self.toggle_button.config(bg=self.hover_color)
+        # 设置添加的组件背景色
+        self._set_widget_bg(widget)
 
-    def _on_header_leave(self, event):
-        """鼠标离开标题区域时的效果"""
-        self.header_frame.config(bg=self.header_bg)
-        self.title_label.config(bg=self.header_bg)
-        if hasattr(self, 'subtitle_label'):
-            self.subtitle_label.config(bg=self.header_bg)
-        if self.icon_label:
-            self.icon_label.config(bg=self.header_bg)
-        # 更新折叠按钮背景色
-        self.toggle_button.config(bg=self.header_bg)
+    def _set_widget_bg(self, widget):
+        """为组件设置正确的背景色
+
+        Args:
+            widget: 要设置背景色的组件
+        """
+        # 检查组件类型并设置合适的背景色
+        try:
+            # 对于tk.Frame, tk.Label等支持bg属性的组件
+            if hasattr(widget, 'configure') and 'bg' in widget.configure():
+                widget.configure(bg=self.bg_color)
+
+            # 对于ttk组件，尝试使用style设置
+            elif isinstance(widget, ttk.Widget):
+                widget_class = widget.winfo_class()
+                widget_name = widget.winfo_name()
+                style_name = f"{widget_name}.{widget_class}"
+
+                style = ttk.Style()
+                try:
+                    # 为不同类型的ttk组件创建适当的样式
+                    if widget_class == "TFrame" or widget_class == "TLabelframe":
+                        style.configure(style_name, background=self.bg_color)
+                    elif widget_class == "TLabel":
+                        style.configure(style_name, background=self.bg_color)
+                    elif widget_class == "TButton" or widget_class == "TCheckbutton" or widget_class == "TRadiobutton":
+                        style.map(style_name, background=[('active', self.bg_color)])
+                        style.configure(style_name, background=self.bg_color)
+
+                    # 应用样式
+                    widget.configure(style=style_name)
+                except tk.TclError:
+                    # 有些ttk组件可能不支持某些样式选项
+                    pass
+
+            # 递归处理子组件
+            for child in widget.winfo_children():
+                self._set_widget_bg(child)
+
+        except Exception as e:
+            # 如果设置背景色失败，记录但不影响程序运行
+            logger.debug(f"设置组件背景色失败: {str(e)}")
 
     def bind_toggle_callback(self, callback):
         """绑定切换状态的回调函数
@@ -433,3 +458,23 @@ class CollapsiblePanel(ttk.Frame):
         """解除绑定切换状态的回调函数"""
         if callback in self.toggle_callbacks:
             self.toggle_callbacks.remove(callback)
+
+    def _on_header_enter(self, event):
+        """鼠标进入头部区域时的效果"""
+        self.header_frame.config(bg=self.hover_color)
+        self.title_label.config(bg=self.hover_color)
+        self.toggle_button.config(bg=self.hover_color)
+        if self.icon_label:
+            self.icon_label.config(bg=self.hover_color)
+        if hasattr(self, 'subtitle_label'):
+            self.subtitle_label.config(bg=self.hover_color)
+
+    def _on_header_leave(self, event):
+        """鼠标离开头部区域时的效果"""
+        self.header_frame.config(bg=self.header_bg)
+        self.title_label.config(bg=self.header_bg)
+        self.toggle_button.config(bg=self.header_bg)
+        if self.icon_label:
+            self.icon_label.config(bg=self.header_bg)
+        if hasattr(self, 'subtitle_label'):
+            self.subtitle_label.config(bg=self.header_bg)

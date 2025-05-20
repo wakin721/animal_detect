@@ -3,14 +3,17 @@ GUI模块 - 提供现代化桌面应用程序界面 (清晰的侧边栏菜单和
 """
 
 import os
+import sys
 import time
 import logging
 import threading
 import platform  # 添加这一行以导入platform模块
+import subprocess
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageTk
 import cv2
+import re
 from shutil import copy
 import json
 from datetime import datetime
@@ -88,10 +91,16 @@ class ObjectDetectionGUI:
             logger.warning(f"无法加载窗口图标: {e}")
 
         # 初始化模型
-        model_path = resource_path(os.path.join("res", "predict.pt"))
-        self.image_processor = ImageProcessor(model_path)
-        # 保存当前使用的模型路径和名称
-        self.image_processor.model_path = model_path
+        model_path = self._find_model_file()
+        if model_path:
+            self.image_processor = ImageProcessor(model_path)
+            # 保存当前使用的模型路径和名称
+            self.image_processor.model_path = model_path
+        else:
+            # 如果没有找到模型文件，创建一个空的处理器，后续会禁用开始按钮
+            self.image_processor = ImageProcessor(None)
+            self.image_processor.model = None
+            self.image_processor.model_path = None
 
         # 状态变量
         self.is_processing = False
@@ -101,9 +110,10 @@ class ObjectDetectionGUI:
         self.original_image = None  # 保存原始图像
         self.current_image_path = None  # 保存当前图像路径
         self.current_page = "settings"  # 当前显示的页面
+        self.pytorch_progress_var = tk.DoubleVar(value=0)
 
         # 处理进度缓存相关变量
-        self.cache_interval = 10  # 每处理10张图片保存一次缓存
+        self.cache_interval = 1  # 每处理10张图片保存一次缓存
         self.excel_data = []  # 保存处理结果数据
 
         # 创建GUI元素
@@ -117,9 +127,9 @@ class ObjectDetectionGUI:
         # 绑定事件
         self._bind_events()
 
-        # 检查模型是否加载成功
+        # 检查模型是否加载成功，如果之前没有显示消息，现在显示
         if not self.image_processor.model:
-            messagebox.showerror("错误", "模型文件未找到。请检查应用程序目录中的模型文件。")
+            messagebox.showerror("错误", "未找到有效的模型文件(.pt)。请在res目录中放入至少一个模型文件。")
             self.start_stop_button["state"] = "disabled"
 
         # 如果需要继续上次处理，自动开始处理
@@ -130,6 +140,36 @@ class ObjectDetectionGUI:
         self.setup_theme_monitoring()
         self._bind_events()
 
+    def _find_model_file(self) -> Optional[str]:
+        """查找可用的模型文件
+
+        Returns:
+            找到的模型文件路径，如果没有找到则返回None
+        """
+        try:
+            # 获取res目录路径
+            res_dir = resource_path("res")
+
+            # 检查目录是否存在
+            if not os.path.exists(res_dir) or not os.path.isdir(res_dir):
+                logger.error(f"无法找到资源目录: {res_dir}")
+                return None
+
+            # 查找所有.pt文件
+            model_files = [f for f in os.listdir(res_dir) if f.endswith('.pt')]
+
+            if not model_files:
+                logger.error("在res目录中没有找到.pt模型文件")
+                return None
+
+            # 使用第一个找到的.pt文件
+            model_path = os.path.join(res_dir, model_files[0])
+            logger.info(f"自动选择模型文件: {model_files[0]}")
+            return model_path
+
+        except Exception as e:
+            logger.error(f"查找模型文件时出错: {e}")
+            return None
 
     def _resume_processing(self) -> None:
         """继续上次未完成的处理任务"""
@@ -711,7 +751,6 @@ class ObjectDetectionGUI:
         )
         self.threshold_panel.pack(fill="x", expand=False, pady=(0, 1))
 
-        # [原有的面板内容代码保持不变]
         # 创建IOU阈值设置
         iou_frame = ttk.Frame(self.threshold_panel.content_padding)
         iou_frame.pack(fill="x", pady=5)
@@ -1233,17 +1272,39 @@ class ObjectDetectionGUI:
         version_combo.pack(fill="x", expand=True)
         version_combo.current(0)  # 默认选择第一项
 
-        # 仅安装必要组件选项
+        # 强制重装选项
         options_frame = ttk.Frame(self.pytorch_panel.content_padding)
         options_frame.pack(fill="x", pady=10)
 
-        self.minimal_install_var = tk.BooleanVar(value=False)
-        minimal_switch = ttk.Checkbutton(
+        self.force_reinstall_var = tk.BooleanVar(value=False)
+        force_reinstall_switch = ttk.Checkbutton(
             options_frame,
-            text="仅安装基础组件",
-            variable=self.minimal_install_var
+            text="强制重装PyTorch",
+            variable=self.force_reinstall_var
         )
-        minimal_switch.pack(anchor="w")
+        force_reinstall_switch.pack(anchor="w")
+
+        # 添加提示文本
+        reinstall_tip = ttk.Label(
+            options_frame,
+            text="勾选后将先卸载现有的torch、torchvision、torchaudio模块再重新安装",
+            foreground="#666666",
+            font=("Segoe UI", 8)
+        )
+        reinstall_tip.pack(anchor="w", padx=(20, 0))
+
+        progress_frame = ttk.Frame(self.pytorch_panel.content_padding)
+        progress_frame.pack(fill="x", pady=(5, 10))
+
+        progress_frame = ttk.Frame(self.pytorch_panel.content_padding)
+        progress_frame.pack(fill="x", pady=(5, 10))
+
+        self.pytorch_progress = ttk.Progressbar(
+            progress_frame,
+            variable=self.pytorch_progress_var,
+            mode="determinate"
+        )
+        self.pytorch_progress.pack(fill="x", expand=True)
 
         # 安装按钮和状态显示
         bottom_frame = ttk.Frame(self.pytorch_panel.content_padding)
@@ -1702,13 +1763,13 @@ class ObjectDetectionGUI:
         # 获取版本
         version = self.pytorch_version_var.get()
         if not version:
-            messagebox.showinfo("提示", "请选择PyTorch版本")
+            messagebox.showerror("错误", "请选择PyTorch版本")
             return
 
-        # 确认安装
-        message = f"将安装 {version}"
-        if self.minimal_install_var.get():
-            message += "（仅基础组件）"
+        # 构建确认消息
+        message = f"将安装 PyTorch {version}"
+        if self.force_reinstall_var.get():
+            message += "，将先卸载现有安装"
 
         if not messagebox.askyesno("确认安装", message + "\n\n是否继续？"):
             return
@@ -1717,14 +1778,17 @@ class ObjectDetectionGUI:
         is_cuda = "CPU" not in version
         cuda_version = None
         if is_cuda:
-            if "CUDA 11.7" in version:
-                cuda_version = "cu117"
-            elif "CUDA 11.8" in version:
-                cuda_version = "cu118"
-            elif "CUDA 12.1" in version:
-                cuda_version = "cu121"
+            cuda_match = re.search(r"CUDA (\d+\.\d+)", version)
+            if cuda_match:
+                cuda_version = cuda_match.group(1)
 
-        pytorch_version = re.search(r"PyTorch (\d+\.\d+\.\d+)", version).group(1)
+        # 修复此处的正则表达式匹配
+        pytorch_match = re.search(r"(\d+\.\d+\.\d+)", version)
+        if pytorch_match:
+            pytorch_version = pytorch_match.group(1)
+        else:
+            messagebox.showerror("错误", "无法解析PyTorch版本")
+            return
 
         # 更新状态并禁用按钮
         self.install_button.configure(state="disabled")
@@ -1734,63 +1798,134 @@ class ObjectDetectionGUI:
         # 在线程中安装
         def install_thread():
             try:
-                # 构建安装命令
-                cmd = [sys.executable, "-m", "pip", "install"]
-
-                # 添加PyTorch包和版本
-                if is_cuda:
-                    cmd.append(f"torch=={pytorch_version}+{cuda_version}")
-                    cmd.extend(["-f", f"https://download.pytorch.org/whl/{cuda_version}/torch_stable.html"])
-                else:
-                    cmd.append(f"torch=={pytorch_version}+cpu")
-                    cmd.extend(["-f", "https://download.pytorch.org/whl/cpu/torch_stable.html"])
-
-                # 添加其他包
-                if not self.minimal_install_var.get():
-                    if is_cuda:
-                        cmd.extend([f"torchvision=={pytorch_version}+{cuda_version}",
-                                    f"torchaudio=={pytorch_version}+{cuda_version}"])
-                    else:
-                        cmd.extend([f"torchvision=={pytorch_version}+cpu", f"torchaudio=={pytorch_version}+cpu"])
-
-                # 更新UI
-                self.master.after(0, lambda: self.pytorch_status_var.set("正在安装..."))
-
-                # 执行命令
-                if platform.system() == "Windows":
-                    process = subprocess.Popen(
-                        f"start cmd /k \"{' '.join(cmd)} && echo PyTorch安装完成，请关闭此窗口 || echo PyTorch安装失败，请检查错误信息\"",
-                        shell=True)
-                else:  # Linux/Mac
-                    process = subprocess.Popen(
-                        f"gnome-terminal -- bash -c \"{' '.join(cmd)}; echo 'PyTorch安装完成，按任意键关闭此窗口'; read -n 1\"",
-                        shell=True)
-
-                # 通知用户
-                self.master.after(0, lambda: messagebox.showinfo("安装已开始",
-                                                                 "PyTorch安装已在命令行窗口启动，\n"
-                                                                 "请查看命令行窗口了解进度。\n\n"
-                                                                 "安装完成后，您需要重启应用程序以应用更改。"))
-
-                # 还原按钮状态
-                self.master.after(0, lambda: self.install_button.configure(state="normal"))
-                self.master.after(0, lambda: self.pytorch_status_var.set("安装中..."))
-
+                self._run_pytorch_install(pytorch_version, cuda_version)
             except Exception as e:
-                logger.error(f"安装PyTorch失败: {e}")
                 self.master.after(0, lambda: self.pytorch_status_var.set(f"安装失败: {str(e)}"))
                 self.master.after(0, lambda: self.install_button.configure(state="normal"))
-                self.master.after(0, lambda: messagebox.showerror("错误", f"安装PyTorch失败: {e}"))
 
         # 启动安装线程
         threading.Thread(target=install_thread, daemon=True).start()
+
+    def _run_pytorch_install(self, pytorch_version, cuda_version=None):
+        """使用弹出命令行窗口安装PyTorch
+
+        Args:
+            pytorch_version: PyTorch版本号
+            cuda_version: CUDA版本号，如果为None则安装CPU版本
+        """
+        try:
+            # 更新UI状态
+            self.master.after(0, lambda: self.pytorch_status_var.set("正在启动安装..."))
+            self.master.after(0, lambda: self.pytorch_progress.configure(value=10))
+
+            # 构建安装命令
+            if cuda_version:
+                # 将CUDA版本转换为PyTorch格式
+                if cuda_version == "11.8":
+                    cuda_str = "cu118"
+                elif cuda_version == "12.1":
+                    cuda_str = "cu121"
+                elif cuda_version == "12.6":
+                    cuda_str = "cu126"
+                elif cuda_version == "12.8":
+                    cuda_str = "cu128"
+                else:
+                    cuda_str = f"cu{cuda_version.replace('.', '')}"
+
+                install_cmd = f"pip install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/{cuda_str}"
+            else:
+                install_cmd = f"pip install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
+
+            # 组合命令，添加成功提示和等待
+            if self.force_reinstall_var.get():
+                # 如果需要先卸载，组合卸载和安装命令
+                command = (
+                    f"echo 正在卸载现有PyTorch... && "
+                    f"pip uninstall -y torch torchvision torchaudio && "
+                    f"echo 卸载完成，开始安装新版本... && "
+                    f"{install_cmd} && "
+                    f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
+                    f"timeout /t 5"
+                )
+            else:
+                # 仅执行安装命令
+                command = (
+                    f"echo 正在安装PyTorch {pytorch_version}... && "
+                    f"{install_cmd} && "
+                    f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
+                    f"timeout /t 5"
+                )
+
+            # 更新状态消息
+            self.master.after(0, lambda: self.pytorch_status_var.set("安装已启动，请查看命令行窗口"))
+
+            # Windows系统使用cmd /C执行完命令自动关闭窗口
+            if platform.system() == "Windows":
+                # 使用/C参数而非/K，这样命令执行完后会关闭窗口
+                # 但我们添加了timeout使其延迟关闭
+                subprocess.Popen(f"start cmd /C \"{command}\"", shell=True)
+            else:
+                # Linux/Mac系统
+                if platform.system() == "Darwin":  # macOS
+                    # macOS使用sleep代替timeout
+                    mac_command = command.replace("timeout /t 5", "sleep 5")
+                    subprocess.Popen(["osascript", "-e", f'tell app "Terminal" to do script "{mac_command}"'])
+                else:  # Linux
+                    # Linux使用sleep代替timeout
+                    linux_command = command.replace("timeout /t 5", "sleep 5")
+                    for terminal in ["gnome-terminal", "konsole", "xterm"]:
+                        try:
+                            if terminal == "gnome-terminal":
+                                subprocess.Popen([terminal, "--", "bash", "-c", f"{linux_command}"])
+                            elif terminal == "konsole":
+                                subprocess.Popen([terminal, "-e", f"bash -c '{linux_command}'"])
+                            elif terminal == "xterm":
+                                subprocess.Popen([terminal, "-e", f"bash -c '{linux_command}'"])
+                            break
+                        except FileNotFoundError:
+                            continue
+
+            # 更新UI状态
+            self.master.after(2000, lambda: self.install_button.configure(state="normal"))
+            self.master.after(2000, lambda: messagebox.showinfo("安装已启动",
+                                                                "PyTorch安装已在命令行窗口中启动，\n"
+                                                                "请查看命令行窗口了解安装进度，\n"
+                                                                "安装完成后，重启程序以使更改生效。\n"
+                                                                "命令执行完成后窗口将在5秒后自动关闭。"))
+
+            version_text = f"{pytorch_version} {'(CUDA ' + cuda_version + ')' if cuda_version else '(CPU)'}"
+            self.master.after(3000, lambda: self.pytorch_status_var.set(f"已完成安装 PyTorch {version_text}"))
+
+        except Exception as e:
+            # 处理异常
+            logger.error(f"安装PyTorch出错: {e}")
+            self.master.after(0, lambda: self.pytorch_status_var.set(f"安装失败: {str(e)}"))
+            self.master.after(0, lambda: self.install_button.configure(state="normal"))
+            self.master.after(0, lambda: messagebox.showerror("安装错误", f"安装PyTorch失败：\n{str(e)}"))
+
+    def _enable_pytorch_buttons(self) -> None:
+        """重新启用PyTorch安装按钮"""
+        try:
+            # 使用pytorch_panel替代advanced_cards
+            if hasattr(self, 'pytorch_panel') and hasattr(self.pytorch_panel, 'content_padding'):
+                for widget in self.pytorch_panel.content_padding.winfo_children():
+                    if isinstance(widget, ttk.Frame):
+                        for w in widget.winfo_children():
+                            if isinstance(w, ttk.Button):
+                                w.configure(state="normal")
+
+                # 直接启用安装按钮
+                if hasattr(self, 'install_button'):
+                    self.install_button.configure(state="normal")
+        except Exception as e:
+            logger.error(f"启用PyTorch按钮失败: {e}")
 
     def _install_python_package(self) -> None:
         """安装Python包"""
         # 获取包名
         package = self.package_var.get().strip()
         if not package:
-            messagebox.showinfo("提示", "请输入包名称")
+            messagebox.showerror("错误", "请输入包名称")
             return
 
         # 获取版本约束
@@ -1806,113 +1941,71 @@ class ObjectDetectionGUI:
         if not messagebox.askyesno("确认安装", f"将安装 {package_spec}\n\n是否继续？"):
             return
 
+        # 在线程中安装
+        def install_thread():
+            try:
+                # 运行pip安装命令
+                self._run_pip_install(package_spec)
+            except Exception as e:
+                logger.error(f"安装Python包出错: {e}")
+                self.master.after(0, lambda: self.package_status_var.set(f"安装失败: {str(e)}"))
+
         # 更新状态
         self.package_status_var.set("准备安装...")
         self.master.update_idletasks()
 
-        # 在线程中安装
-        def install_thread():
-            try:
-                # 构建安装命令
-                cmd = [sys.executable, "-m", "pip", "install", "--upgrade", package_spec]
-
-                # 更新UI
-                self.master.after(0, lambda: self.package_status_var.set("正在安装..."))
-
-                # 执行命令
-                if platform.system() == "Windows":
-                    process = subprocess.Popen(
-                        f"start cmd /k \"{' '.join(cmd)} && echo 包安装完成，请关闭此窗口 || echo 包安装失败，请检查错误信息\"",
-                        shell=True)
-                else:  # Linux/Mac
-                    process = subprocess.Popen(
-                        f"gnome-terminal -- bash -c \"{' '.join(cmd)}; echo '包安装完成，按任意键关闭此窗口'; read -n 1\"",
-                        shell=True)
-
-                # 通知用户
-                self.master.after(0, lambda: messagebox.showinfo("安装已开始",
-                                                                 f"{package} 安装已在命令行窗口启动，\n"
-                                                                 "请查看命令行窗口了解进度。"))
-
-                # 还原状态
-                self.master.after(0, lambda: self.package_status_var.set("安装中..."))
-
-            except Exception as e:
-                logger.error(f"安装包失败: {e}")
-                self.master.after(0, lambda: self.package_status_var.set(f"安装失败: {str(e)}"))
-                self.master.after(0, lambda: messagebox.showerror("错误", f"安装包失败: {e}"))
-
         # 启动安装线程
         threading.Thread(target=install_thread, daemon=True).start()
 
-    def _run_pytorch_install(self, version: str, cuda_version: str) -> None:
-        """在后台线程中运行PyTorch安装"""
-        self.pytorch_status_var.set("正在安装...")
-        self.pytorch_progress_var.set(0)
+    def _run_pip_install(self, package_spec):
+        """使用弹出命令行窗口安装Python包
 
+        Args:
+            package_spec: 包规范，例如 "numpy" 或 "pandas>=1.0.0"
+        """
         try:
-            # 构建安装命令
-            cmd = [sys.executable, "-m", "pip", "install"]
+            # 更新UI状态
+            self.master.after(0, lambda: self.package_status_var.set("正在启动安装..."))
 
-            # 基于版本和CUDA版本构建PyTorch安装URL
-            if "CPU Only" in cuda_version:
-                cmd.append(f"torch=={version}+cpu")
-                cmd.extend(["-f", "https://download.pytorch.org/whl/cpu/torch_stable.html"])
-            elif "CUDA" in cuda_version:
-                cuda_ver = cuda_version.split(" ")[1].replace(".", "")  # 例如将CUDA 11.8转换为cu118
-                cmd.append(f"torch=={version}+{cuda_ver}")
-                cmd.extend(["-f", f"https://download.pytorch.org/whl/{cuda_ver}/torch_stable.html"])
-            else:
-                cmd.append(f"torch=={version}")
-
-            # 设置进度更新
-            def update_progress(line):
-                if "%" in line:
-                    try:
-                        percent = float(line.split("%")[0].split(" ")[-1].strip())
-                        self.pytorch_progress_var.set(percent)
-
-                        # 更新UI
-                        self.master.update_idletasks()
-                    except:
-                        pass
-
-            # 执行命令并捕获输出
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+            # 构建命令
+            install_cmd = f"pip install {package_spec}"
+            command = (
+                f"echo 正在安装 {package_spec}... && "
+                f"{install_cmd} && "
+                f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
+                f"timeout /t 5"
             )
 
-            # 读取输出
-            for line in process.stdout:
-                update_progress(line)
+            # 更新状态消息
+            self.master.after(0, lambda: self.package_status_var.set("安装已启动，请查看命令行窗口"))
 
-            process.wait()
-
-            if process.returncode == 0:
-                self.master.after(0, lambda: self.pytorch_status_var.set("安装成功"))
-                self.master.after(0, lambda: self.pytorch_progress_var.set(100))
-                self.master.after(1000, self._check_pytorch_status)
+            # Windows系统使用cmd /C执行完命令自动关闭窗口
+            if platform.system() == "Windows":
+                subprocess.Popen(f"start cmd /C \"{command}\"", shell=True)
             else:
-                self.master.after(0, lambda: self.pytorch_status_var.set("安装失败"))
+                # Linux/Mac系统
+                if platform.system() == "Darwin":  # macOS
+                    # macOS使用sleep代替timeout
+                    mac_command = command.replace("timeout /t 5", "sleep 5")
+                    subprocess.Popen(["osascript", "-e", f'tell app "Terminal" to do script "{mac_command}"'])
+                else:  # Linux
+                    # Linux使用sleep代替timeout
+                    linux_command = command.replace("timeout /t 5", "sleep 5")
+                    for terminal in ["gnome-terminal", "konsole", "xterm"]:
+                        try:
+                            subprocess.Popen([terminal, "-e", f"bash -c '{linux_command}; read -n1'"])
+                            break
+                        except FileNotFoundError:
+                            continue
+
+            # 等待几秒后更新UI状态为已完成
+            self.master.after(3000, lambda: self.package_status_var.set(f"已完成安装 {package_spec}"))
 
         except Exception as e:
-            self.master.after(0, lambda: self.pytorch_status_var.set(f"安装错误: {str(e)}"))
-
-        finally:
-            # 启用安装按钮
-            self.master.after(0, lambda: self._enable_pytorch_buttons())
-
-    def _enable_pytorch_buttons(self) -> None:
-        """重新启用PyTorch安装按钮"""
-        for widget in self.advanced_cards["pytorch"]["content"].winfo_children():
-            if isinstance(widget, ttk.Frame):
-                for w in widget.winfo_children():
-                    if isinstance(w, ttk.Button):
-                        w.configure(state="normal")
+            # 处理异常
+            logger.error(f"安装Python包出错: {e}")
+            self.master.after(0, lambda: self.package_status_var.set(f"安装失败: {str(e)}"))
+            self.master.after(0, lambda: messagebox.showerror("安装错误", f"安装Python包失败：\n{str(e)}"))
 
     def _update_iou_label(self, value) -> None:
         """更新IOU标签显示"""
