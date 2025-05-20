@@ -139,6 +139,7 @@ class ObjectDetectionGUI:
 
         self.setup_theme_monitoring()
         self._bind_events()
+        self._load_validation_data()
 
     def _find_model_file(self) -> Optional[str]:
         """查找可用的模型文件
@@ -635,9 +636,31 @@ class ObjectDetectionGUI:
         """创建图像预览页面"""
         self.preview_page = ttk.Frame(self.content_frame)
 
+        # 创建标签页控件
+        self.preview_notebook = ttk.Notebook(self.preview_page)
+        self.preview_notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # 创建两个标签页：图像预览和检查校验
+        self.image_preview_tab = ttk.Frame(self.preview_notebook)
+        self.validation_tab = ttk.Frame(self.preview_notebook)
+
+        self.preview_notebook.add(self.image_preview_tab, text="图像预览")
+        self.preview_notebook.add(self.validation_tab, text="检查校验")
+
+        # 绑定标签页切换事件
+        self.preview_notebook.bind("<<NotebookTabChanged>>", self._on_preview_tab_changed)
+
+        # 创建图像预览标签页内容
+        self._create_image_preview_content(self.image_preview_tab)
+
+        # 创建检查校验标签页内容
+        self._create_validation_content(self.validation_tab)
+
+    def _create_image_preview_content(self, parent):
+        """创建图像预览标签页内容"""
         # 创建预览区域
-        preview_content = ttk.Frame(self.preview_page)
-        preview_content.pack(fill="both", expand=True, padx=20, pady=10)
+        preview_content = ttk.Frame(parent)
+        preview_content.pack(fill="both", expand=True)
 
         # 左侧文件列表
         list_frame = ttk.LabelFrame(preview_content, text="图像文件")
@@ -676,14 +699,428 @@ class ObjectDetectionGUI:
         # 显示检测结果开关
         self.show_detection_var = tk.BooleanVar(value=False)
         show_detection_switch = ttk.Checkbutton(
-            control_frame, text="显示检测结果", variable=self.show_detection_var,
-            command=self.toggle_detection_preview)
+            control_frame,
+            text="显示检测结果",
+            variable=self.show_detection_var,
+            command=self.toggle_detection_preview
+        )
         show_detection_switch.pack(side="left")
 
         # 检测按钮
         self.detect_button = ttk.Button(
-            control_frame, text="检测当前图像", command=self.detect_current_image, width=12)
+            control_frame,
+            text="检测当前图像",
+            command=self.detect_current_image,
+            width=12
+        )
         self.detect_button.pack(side="right")
+
+    def _create_validation_content(self, parent):
+        """创建检查校验标签页内容"""
+        # 创建校验数据字典
+        if not hasattr(self, 'validation_data'):
+            self.validation_data = {}
+
+        # 创建预览区域
+        validation_content = ttk.Frame(parent)
+        validation_content.pack(fill="both", expand=True)
+
+        # 左侧文件列表
+        list_frame = ttk.LabelFrame(validation_content, text="处理后图像")
+        list_frame.pack(side="left", fill="y", padx=(0, 10))
+
+        self.validation_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT)
+        self.validation_listbox.pack(side="left", fill="both", expand=True)
+
+        validation_list_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.validation_listbox.yview)
+        validation_list_scrollbar.pack(side="right", fill="y")
+        self.validation_listbox.config(yscrollcommand=validation_list_scrollbar.set)
+
+        # 右侧预览区域
+        preview_right = ttk.Frame(validation_content)
+        preview_right.pack(side="right", fill="both", expand=True)
+
+        # 预览图像区域
+        image_frame = ttk.LabelFrame(preview_right, text="图像校验")
+        image_frame.pack(fill="both", expand=True, pady=(0, 10))
+
+        self.validation_image_label = ttk.Label(image_frame, text="请从左侧列表选择处理后的图像", anchor="center")
+        self.validation_image_label.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # 添加双击事件绑定
+        self.validation_image_label.bind("<Double-1>", self.on_image_double_click)
+
+        # 检测信息区域
+        info_frame = ttk.LabelFrame(preview_right, text="检测信息")
+        info_frame.pack(fill="x", pady=(0, 10))
+
+        self.validation_info_text = tk.Text(info_frame, height=3, font=NORMAL_FONT, wrap="word")
+        self.validation_info_text.pack(fill="both", expand=True, padx=5, pady=5)
+        self.validation_info_text.config(state="disabled")
+
+        # 校验控制区域
+        validation_control_frame = ttk.Frame(preview_right)
+        validation_control_frame.pack(fill="x", pady=5)
+
+        # 校验状态标签
+        self.validation_status_label = ttk.Label(validation_control_frame, text="未校验", font=NORMAL_FONT)
+        self.validation_status_label.pack(side="left", padx=5)
+
+        # 进度显示
+        progress_text = ttk.Label(validation_control_frame, text="进度:")
+        progress_text.pack(side="left", padx=(20, 5))
+
+        self.validation_progress_var = tk.StringVar(value="0/0")
+        progress_label = ttk.Label(validation_control_frame, textvariable=self.validation_progress_var)
+        progress_label.pack(side="left")
+
+        # 创建所有按钮的统一框架
+        buttons_frame = ttk.Frame(preview_right)
+        buttons_frame.pack(fill="x", pady=10)
+
+        # 校验按钮（正确/错误）
+        self.correct_button = ttk.Button(
+            buttons_frame,
+            text="正确 ✅",
+            command=lambda: self._mark_validation(True),
+            width=10
+        )
+        self.correct_button.pack(side="left", padx=(0, 5))
+
+        self.incorrect_button = ttk.Button(
+            buttons_frame,
+            text="错误 ❌",
+            command=lambda: self._mark_validation(False),
+            width=10
+        )
+        self.incorrect_button.pack(side="left", padx=5)
+
+        # 导出按钮
+        self.export_excel_button = ttk.Button(
+            buttons_frame,
+            text="导出为Excel",
+            command=self._export_validation_excel,
+            width=12,
+            state="disabled"  # 初始状态为禁用
+        )
+        self.export_excel_button.pack(side="right", padx=(5, 0))
+
+        self.export_error_button = ttk.Button(
+            buttons_frame,
+            text="导出错误图片",
+            command=self._export_error_images,
+            width=12
+        )
+        self.export_error_button.pack(side="right", padx=5)
+
+        # 绑定列表选择事件
+        self.validation_listbox.bind("<<ListboxSelect>>", self._on_validation_file_selected)
+
+        # 添加键盘快捷键
+        parent.bind("<Key-1>", lambda e: self._mark_validation(True))  # 按1标记为正确
+        parent.bind("<Key-2>", lambda e: self._mark_validation(False))  # 按2标记为错误
+
+    def _on_preview_tab_changed(self, event):
+        """处理预览标签页切换事件"""
+        selected_tab = self.preview_notebook.select()
+        tab_text = self.preview_notebook.tab(selected_tab, "text")
+
+        if tab_text == "检查校验":
+            # 加载处理后的图片列表
+            self._load_processed_images()
+
+    def _load_processed_images(self):
+        """加载处理后的图片列表"""
+        # 获取temp/photo目录路径
+        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+        photo_dir = os.path.join(temp_dir, "photo")
+
+        if not os.path.exists(photo_dir):
+            messagebox.showinfo("提示", "没有找到处理过的图片")
+            return
+
+        # 清空列表
+        self.validation_listbox.delete(0, tk.END)
+
+        # 过滤只要图像文件
+        processed_images = []
+        for file in os.listdir(photo_dir):
+            ext = os.path.splitext(file)[1].lower()
+            if ext in SUPPORTED_IMAGE_EXTENSIONS and not file.startswith('.'):
+                processed_images.append(file)
+
+        # 排序文件列表
+        processed_images.sort()
+
+        # 添加到列表框
+        for file in processed_images:
+            self.validation_listbox.insert(tk.END, file)
+
+        # 更新进度显示
+        validated_count = sum(1 for k, v in self.validation_data.items() if v is not None)
+        self.validation_progress_var.set(f"{validated_count}/{len(processed_images)}")
+
+        # 如果列表不为空，选择第一个未校验的文件
+        if processed_images:
+            # 查找第一个未校验的图片
+            for i, file in enumerate(processed_images):
+                if file not in self.validation_data:
+                    self.validation_listbox.selection_clear(0, tk.END)
+                    self.validation_listbox.selection_set(i)
+                    self.validation_listbox.see(i)
+                    self._on_validation_file_selected(None)
+                    break
+            # 如果所有图片都已校验，选择第一个
+            if not self.validation_listbox.curselection():
+                self.validation_listbox.selection_set(0)
+                self._on_validation_file_selected(None)
+
+    def _on_validation_file_selected(self, event):
+        """处理校验文件选择事件"""
+        selection = self.validation_listbox.curselection()
+        if not selection:
+            return
+
+        file_name = self.validation_listbox.get(selection[0])
+
+        # 获取处理后图片路径
+        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+        photo_path = os.path.join(temp_dir, "photo")
+        file_path = os.path.join(photo_path, file_name)
+
+        # 更新预览图像
+        try:
+            # 加载图像
+            img = Image.open(file_path)
+            # 调整图像大小以适应显示区域
+            img = self._resize_image_to_fit(img, 500, 400)
+            # 转换为PhotoImage
+            photo = ImageTk.PhotoImage(img)
+            # 更新图像标签
+            self.validation_image_label.config(image=photo)
+            self.validation_image_label.image = photo  # 保持引用
+        except Exception as e:
+            logger.error(f"加载校验图像失败: {e}")
+            self.validation_image_label.config(image='', text=f"图像加载失败: {str(e)}")
+
+        # 更新检测信息
+        base_name, _ = os.path.splitext(file_name)
+        json_path = os.path.join(photo_path, f"{base_name}.json")
+
+        self.validation_info_text.config(state="normal")
+        self.validation_info_text.delete(1.0, tk.END)
+
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    detection_data = json.load(f)
+
+                # 显示检测信息
+                info_text = f"文件名: {file_name}\n"
+                info_text += f"物种: {', '.join(detection_data.get('物种名称', ['未检测到']))}\n"
+                info_text += f"置信度: {', '.join([f'{conf:.2f}' for conf in detection_data.get('置信度', [])])}\n"
+                info_text += f"数量: {detection_data.get('数量', 0)}"
+
+                self.validation_info_text.insert(tk.END, info_text)
+            except Exception as e:
+                self.validation_info_text.insert(tk.END, f"无法加载检测数据: {str(e)}")
+        else:
+            self.validation_info_text.insert(tk.END, "没有找到检测数据文件")
+
+        self.validation_info_text.config(state="disabled")
+
+        # 更新校验状态显示
+        if file_name in self.validation_data:
+            if self.validation_data[file_name]:
+                self.validation_status_label.config(text="已标记: 正确 ✅")
+            else:
+                self.validation_status_label.config(text="已标记: 错误 ❌")
+        else:
+            self.validation_status_label.config(text="未校验")
+
+    def _mark_validation(self, is_correct):
+        """标记当前图片的校验结果
+
+        Args:
+            is_correct: 布尔值，表示图片是否正确
+        """
+        selection = self.validation_listbox.curselection()
+        if not selection:
+            return
+
+        file_name = self.validation_listbox.get(selection[0])
+
+        # 保存校验结果
+        self.validation_data[file_name] = is_correct
+
+        # 更新校验状态显示
+        self.validation_status_label.config(text=f"已标记: {'正确 ✅' if is_correct else '错误 ❌'}")
+
+        # 保存验证数据到JSON文件
+        self._save_validation_data()
+
+        # 更新进度
+        validated_count = sum(1 for k, v in self.validation_data.items() if v is not None)
+        total_count = self.validation_listbox.size()
+        self.validation_progress_var.set(f"{validated_count}/{total_count}")
+
+        # 自动移动到下一个未校验的图片
+        current_index = selection[0]
+        found_next = False
+
+        # 从当前位置向后查找
+        for i in range(current_index + 1, self.validation_listbox.size()):
+            file = self.validation_listbox.get(i)
+            if file not in self.validation_data:
+                self.validation_listbox.selection_clear(0, tk.END)
+                self.validation_listbox.selection_set(i)
+                self.validation_listbox.see(i)
+                self._on_validation_file_selected(None)
+                found_next = True
+                break
+
+        # 如果没有找到，从头开始查找
+        if not found_next:
+            for i in range(0, current_index):
+                file = self.validation_listbox.get(i)
+                if file not in self.validation_data:
+                    self.validation_listbox.selection_clear(0, tk.END)
+                    self.validation_listbox.selection_set(i)
+                    self.validation_listbox.see(i)
+                    self._on_validation_file_selected(None)
+                    found_next = True
+                    break
+
+        # 如果所有图片都已校验，显示完成消息
+        if not found_next and validated_count == total_count:
+            messagebox.showinfo("校验完成", "所有图片已完成校验！")
+
+    def _save_validation_data(self):
+        """保存校验数据到JSON文件"""
+        # 获取temp目录路径
+        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+        validation_file = os.path.join(temp_dir, "validation.json")
+
+        try:
+            with open(validation_file, 'w', encoding='utf-8') as f:
+                json.dump(self.validation_data, f, ensure_ascii=False, indent=2)
+            logger.info(f"校验数据已保存到 {validation_file}")
+        except Exception as e:
+            logger.error(f"保存校验数据失败: {e}")
+            messagebox.showerror("错误", f"保存校验数据失败: {str(e)}")
+
+    def _load_validation_data(self):
+        """从JSON文件加载校验数据"""
+        # 获取temp目录路径
+        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+        validation_file = os.path.join(temp_dir, "validation.json")
+
+        if os.path.exists(validation_file):
+            try:
+                with open(validation_file, 'r', encoding='utf-8') as f:
+                    self.validation_data = json.load(f)
+                logger.info(f"已加载校验数据，共 {len(self.validation_data)} 条记录")
+                return True
+            except Exception as e:
+                logger.error(f"加载校验数据失败: {e}")
+                self.validation_data = {}
+                return False
+        else:
+            logger.info("没有找到校验数据文件，创建新的校验数据")
+            self.validation_data = {}
+            return False
+
+    def _export_error_images(self):
+        """导出标记为错误的图片"""
+        # 检查是否有错误图片
+        error_files = [file for file, is_correct in self.validation_data.items() if is_correct is False]
+
+        if not error_files:
+            messagebox.showinfo("提示", "没有标记为错误的图片")
+            return
+
+        # 获取源图片目录和保存目录
+        source_dir = self.file_path_entry.get()
+        save_dir = self.save_path_entry.get()
+
+        if not source_dir or not os.path.isdir(source_dir):
+            messagebox.showerror("错误", "请先设置有效的图像文件路径")
+            return
+
+        if not save_dir or not os.path.isdir(save_dir):
+            messagebox.showerror("错误", "请先设置有效的结果保存路径")
+            return
+
+        # 创建error子文件夹
+        error_folder = os.path.join(save_dir, "error")
+        if not os.path.exists(error_folder):
+            try:
+                os.makedirs(error_folder)
+            except Exception as e:
+                messagebox.showerror("错误", f"创建错误图片文件夹失败: {str(e)}")
+                return
+
+        # 开始复制
+        copied_count = 0
+        errors = []
+
+        for file in error_files:
+            source_file = os.path.join(source_dir, file)
+            target_file = os.path.join(error_folder, file)
+
+            try:
+                if os.path.exists(source_file):
+                    copy(source_file, target_file)
+                    copied_count += 1
+                else:
+                    errors.append(f"找不到源文件: {file}")
+            except Exception as e:
+                errors.append(f"复制 {file} 失败: {str(e)}")
+
+        # 显示结果
+        if errors:
+            error_message = "\n".join(errors[:10])
+            if len(errors) > 10:
+                error_message += f"\n... 等共 {len(errors)} 个错误"
+            messagebox.showwarning("警告",
+                                   f"复制了 {copied_count} 个文件，但有 {len(errors)} 个错误:\n\n{error_message}")
+        else:
+            messagebox.showinfo("成功", f"成功复制了 {copied_count} 个标记为错误的图片到 {error_folder}")
+
+    def _export_validation_excel(self):
+        """导出校验结果为Excel表格"""
+        # 这个功能暂时停用
+        pass
+
+    def _resize_image_to_fit(self, img, max_width, max_height):
+        """调整图像大小以适应显示区域，保持纵横比
+
+        Args:
+            img: PIL图像对象
+            max_width: 最大宽度
+            max_height: 最大高度
+
+        Returns:
+            调整大小后的PIL图像对象
+        """
+        # 获取原始尺寸
+        width, height = img.size
+
+        # 计算缩放比例
+        scale_width = max_width / width
+        scale_height = max_height / height
+        scale = min(scale_width, scale_height)
+
+        # 如果图像已经小于最大尺寸，不进行缩放
+        if width <= max_width and height <= max_height:
+            return img
+
+        # 计算新尺寸
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+
+        # 调整图像大小
+        return img.resize((new_width, new_height), Image.LANCZOS)
 
     def _create_advanced_page(self) -> None:
         """创建高级设置页面，使用标签页分隔功能"""
@@ -2488,20 +2925,21 @@ class ObjectDetectionGUI:
     def on_closing(self) -> None:
         """窗口关闭事件处理"""
         if self.is_processing:
-            if not messagebox.askyesno("警告",
-                                       "处理正在进行中，确定要退出程序吗？\n处理进度将会保存，下次启动时可以继续。"):
+            if not messagebox.askyesno("确认退出", "图像处理正在进行中，确定要退出吗？"):
                 return
+            self.processing_stop_flag.set()  # 设置停止标志
 
-            # 停止处理但不删除缓存
-            self.processing_stop_flag.set()
+        # 保存校验数据
+        if hasattr(self, 'validation_data'):
+            self._save_validation_data()
 
         # 释放图像资源
         if hasattr(self, 'preview_image'):
-            self.preview_image = None
+            del self.preview_image
         if hasattr(self, 'original_image'):
-            self.original_image = None
+            del self.original_image
         if hasattr(self, 'current_detection_results'):
-            self.current_detection_results = None
+            del self.current_detection_results
 
         # 强制垃圾回收
         import gc
@@ -2509,10 +2947,9 @@ class ObjectDetectionGUI:
 
         # 保存当前设置，添加防错处理
         try:
-            if hasattr(self, '_save_current_settings'):
-                self._save_current_settings()
+            self._save_current_settings()
         except Exception as e:
-            logger.error(f"保存设置时出错: {e}")
+            logger.error(f"保存设置失败: {e}")
 
         self.master.destroy()
 
@@ -2520,10 +2957,13 @@ class ObjectDetectionGUI:
         """浏览文件路径"""
         folder_selected = filedialog.askdirectory(title="选择图像文件所在文件夹")
         if folder_selected:
-            # 如果选择了新的文件夹，则清空临时图像目录
-            if self.current_path != folder_selected:
+            # 检查是否有当前路径属性，并比较路径
+            current_path = getattr(self, 'current_path', None)
+            if current_path != folder_selected:
                 self._clean_temp_photo_directory()
 
+            # 更新当前路径
+            self.current_path = folder_selected
             self.file_path_entry.delete(0, tk.END)
             self.file_path_entry.insert(0, folder_selected)
             self.update_file_list(folder_selected)
@@ -2874,8 +3314,17 @@ class ObjectDetectionGUI:
         copy_img = self.copy_img_var.get()
         use_fp16 = self.use_fp16_var.get()
 
-        # 验证输入
-        if not self._validate_inputs(file_path, save_path):
+        # 验证路径
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showerror("错误", "请选择有效的图像文件路径")
+            return
+
+        if not save_path or not os.path.isdir(save_path):
+            messagebox.showerror("错误", "请选择有效的结果保存路径")
+            return
+
+        # 确保处理未在进行中
+        if self.is_processing:
             return
 
         # 检查是否选择了至少一个功能
@@ -2887,7 +3336,7 @@ class ObjectDetectionGUI:
         self._set_processing_state(True)
 
         # 切换到图像预览选项卡
-        self.notebook.select(1)
+        self._show_page("preview")
 
         # 如果不是继续处理，则清空excel_data
         if resume_from == 0:
