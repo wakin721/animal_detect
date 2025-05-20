@@ -110,7 +110,6 @@ class ObjectDetectionGUI:
         self.original_image = None  # 保存原始图像
         self.current_image_path = None  # 保存当前图像路径
         self.current_page = "settings"  # 当前显示的页面
-        self.pytorch_progress_var = tk.DoubleVar(value=0)
 
         # 处理进度缓存相关变量
         self.cache_interval = 1  # 每处理10张图片保存一次缓存
@@ -551,9 +550,13 @@ class ObjectDetectionGUI:
         """创建基本设置页面"""
         self.settings_page = ttk.Frame(self.content_frame)
 
+        # 设置settings_page的布局，使底部元素可以定位在右下角
+        self.settings_page.columnconfigure(0, weight=1)
+        self.settings_page.rowconfigure(2, weight=1)  # 给中间区域分配权重，使底部保持在底部
+
         # 路径设置区域
         paths_frame = ttk.LabelFrame(self.settings_page, text="路径设置")
-        paths_frame.pack(fill="x", padx=20, pady=10)
+        paths_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=10)
 
         # 文件路径
         file_path_frame = ttk.Frame(paths_frame)
@@ -591,7 +594,7 @@ class ObjectDetectionGUI:
 
         # 功能选项区域
         options_frame = ttk.LabelFrame(self.settings_page, text="功能选项")
-        options_frame.pack(fill="x", padx=20, pady=10)
+        options_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=10)
 
         # 创建选项
         self.save_detect_image_var = tk.BooleanVar(value=True)
@@ -615,22 +618,55 @@ class ObjectDetectionGUI:
             options_container, text="按物种分类图片", variable=self.copy_img_var)
         copy_img_switch.grid(row=2, column=0, sticky="w", pady=5, padx=10)
 
-        # 处理控制区域 - 只在基本设置页面显示
+        # 添加一个空白框架作为占位符，使底部元素保持在底部
+        spacer = ttk.Frame(self.settings_page)
+        spacer.grid(row=2, column=0, sticky="nsew")
+
+        # 处理控制区域 - 使用grid布局放在底部
         process_frame = ttk.Frame(self.settings_page)
-        process_frame.pack(fill="x", padx=20, pady=20)
+        process_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=20)
+        process_frame.columnconfigure(0, weight=1)  # 让进度条占据大部分空间
 
-        # 进度条和信息
+        # 进度条和信息 - 使用修改后的SpeedProgressBar
         self.progress_frame = SpeedProgressBar(process_frame)
-        self.progress_frame.pack(fill="x", pady=10)
+        self.progress_frame.grid(row=0, column=0, sticky="ew", pady=10)
 
-        # 开始处理按钮
+        # 创建按钮样式
+        style = ttk.Style()
+
+        # 安全地获取系统强调色
+        accent_color = getattr(self, 'accent_color', "#0078d7")  # 默认为微软蓝
+
+        # 确定文本颜色 - 根据背景色亮度
+        try:
+            # 将十六进制颜色转换为RGB
+            r = int(accent_color[1:3], 16)
+            g = int(accent_color[3:5], 16)
+            b = int(accent_color[5:7], 16)
+
+            # 计算亮度
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+
+            # 亮度高于128使用黑色文字，否则使用白色文字
+            text_color = "#000000" if brightness > 128 else "#ffffff"
+        except:
+            # 如果转换失败，默认使用白色文本
+            text_color = "#ffffff"
+
+        # 创建自定义按钮样式
+        style.configure("Accent.TButton",
+                        background=accent_color,
+                        foreground=text_color,
+                        font=("Segoe UI", 11, "bold"))
+
+        # 开始处理按钮 - 放置在右下角，使用系统强调色
         self.start_stop_button = ttk.Button(
             process_frame,
             text="▶ 开始处理",
             command=self.toggle_processing_state,
-            style="Process.TButton",
+            style="Accent.TButton",
             width=15)
-        self.start_stop_button.pack(side="right", pady=0)
+        self.start_stop_button.grid(row=0, column=1, padx=(10, 0), sticky="e")
 
     def _create_preview_page(self) -> None:
         """创建图像预览页面"""
@@ -1670,7 +1706,7 @@ class ObjectDetectionGUI:
         self._refresh_model_list()
 
     def _create_env_maintenance_content(self) -> None:
-        """创建环境维护标签页内容 - 修复版本"""
+        """创建环境维护标签页内容"""
         # 清除旧内容
         for widget in self.env_maintenance_tab.winfo_children():
             widget.destroy()
@@ -1757,19 +1793,6 @@ class ObjectDetectionGUI:
             font=("Segoe UI", 8)
         )
         reinstall_tip.pack(anchor="w", padx=(20, 0))
-
-        progress_frame = ttk.Frame(self.pytorch_panel.content_padding)
-        progress_frame.pack(fill="x", pady=(5, 10))
-
-        progress_frame = ttk.Frame(self.pytorch_panel.content_padding)
-        progress_frame.pack(fill="x", pady=(5, 10))
-
-        self.pytorch_progress = ttk.Progressbar(
-            progress_frame,
-            variable=self.pytorch_progress_var,
-            mode="determinate"
-        )
-        self.pytorch_progress.pack(fill="x", expand=True)
 
         # 安装按钮和状态显示
         bottom_frame = ttk.Frame(self.pytorch_panel.content_padding)
@@ -2281,7 +2304,6 @@ class ObjectDetectionGUI:
         try:
             # 更新UI状态
             self.master.after(0, lambda: self.pytorch_status_var.set("正在启动安装..."))
-            self.master.after(0, lambda: self.pytorch_progress.configure(value=10))
 
             # 构建安装命令
             if cuda_version:
