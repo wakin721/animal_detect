@@ -651,7 +651,7 @@ class ObjectDetectionGUI:
         self.start_stop_button = RoundedButton(
             button_container,  # 使用button_container作为父容器
             text="▶️开始处理",
-            bg=sidebar_bg,  # 使用绿色背景
+            bg=sidebar_bg,  # 使用主题颜色
             fg=sidebar_fg,  # 白色文字
             width=160,  # 设置宽度
             height=80,  # 设置高度
@@ -687,6 +687,10 @@ class ObjectDetectionGUI:
 
     def _create_image_preview_content(self, parent):
         """创建图像预览标签页内容"""
+
+        sidebar_bg = self.sidebar_bg if hasattr(self, 'sidebar_bg') else self.accent_color
+        sidebar_fg = self.sidebar_fg if hasattr(self, 'sidebar_fg') else "#ffffff"
+
         # 创建预览区域
         preview_content = ttk.Frame(parent)
         preview_content.pack(fill="both", expand=True)
@@ -695,7 +699,9 @@ class ObjectDetectionGUI:
         list_frame = ttk.LabelFrame(preview_content, text="图像文件")
         list_frame.pack(side="left", fill="y", padx=(0, 10))
 
-        self.file_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT)
+        self.file_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT,
+                                       selectbackground=sidebar_bg,
+                                       selectforeground=sidebar_fg)  # 根据sidebar_bg的颜色选择合适的前景色
         self.file_listbox.pack(side="left", fill="both", expand=True)
 
         file_list_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.file_listbox.yview)
@@ -746,6 +752,10 @@ class ObjectDetectionGUI:
 
     def _create_validation_content(self, parent):
         """创建检查校验标签页内容"""
+
+        sidebar_bg = self.sidebar_bg if hasattr(self, 'sidebar_bg') else self.accent_color
+        sidebar_fg = self.sidebar_fg if hasattr(self, 'sidebar_fg') else "#ffffff"
+
         # 创建校验数据字典
         if not hasattr(self, 'validation_data'):
             self.validation_data = {}
@@ -758,7 +768,9 @@ class ObjectDetectionGUI:
         list_frame = ttk.LabelFrame(validation_content, text="处理后图像")
         list_frame.pack(side="left", fill="y", padx=(0, 10))
 
-        self.validation_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT)
+        self.validation_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT,
+                                             selectbackground=sidebar_bg,  # 设置选中背景色为sidebar_bg
+                                             selectforeground=sidebar_fg)  # 设置选中文字颜色为sidebar_fg
         self.validation_listbox.pack(side="left", fill="both", expand=True)
 
         validation_list_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.validation_listbox.yview)

@@ -26,7 +26,29 @@ class RoundedButton(tk.Canvas):
             highlight_color: 高亮指示条颜色
         """
         # 安全地获取父组件背景色
-        parent_bg = '#ffffff'  # 默认白色背景
+        # 根据深色模式设置默认背景色
+        is_dark_mode = False
+        try:
+            # 尝试确定是否为深色模式
+            if hasattr(parent, 'is_dark_mode'):
+                is_dark_mode = parent.is_dark_mode
+            elif hasattr(parent, 'master') and hasattr(parent.master, 'is_dark_mode'):
+                is_dark_mode = parent.master.is_dark_mode
+            # 根据ttk样式判断
+            else:
+                try:
+                    style = ttk.Style()
+                    current_theme = style.theme_use()
+                    is_dark_mode = (current_theme == "dark" or
+                                    current_theme == "sun-valley-dark" or
+                                    "dark" in current_theme.lower())
+                except:
+                    pass
+        except:
+            pass
+
+        # 根据深色模式设置默认背景色
+        parent_bg = '#1C1C1C' if is_dark_mode else '#FAFAFA'
 
         try:
             # 尝试多种方法获取父组件背景色
@@ -164,7 +186,7 @@ class RoundedButton(tk.Canvas):
             fill=bg_color, outline="", tags="body"
         )
 
-        # 绘制四个角的圆弧
+        # 绘制四个角的圆弧 - 使用按钮当前背景色，而不是父组件背景色
         self.create_arc(
             0, 0, radius * 2, radius * 2,
             start=90, extent=90, fill=bg_color, outline=""
@@ -232,7 +254,7 @@ class RoundedButton(tk.Canvas):
             self.create_arc(
                 x_left,  # 与上半圆使用完全相同的x坐标
                 indicator_y_offset + indicator_height - circle_diameter,
-                circle_diameter * 0.75,  # 与上半圆使用完全相同的宽度
+                circle_diameter * 0.75,  # 修正：使用相同的直径确保对齐
                 indicator_y_offset + indicator_height,
                 start=180,
                 extent=180,  # 180度弧，形成半圆
