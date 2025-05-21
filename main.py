@@ -14,10 +14,9 @@ from tkinter import ttk, messagebox
 # 自动安装依赖
 def install_requirements():
     # 首先安装setuptools，这是许多其他包的依赖
-    print("检查setuptools是否已安装...")
+    print("正在检查依赖...")
     try:
         import setuptools
-        print("setuptools已安装.")
     except ImportError:
         print("setuptools未安装，正在自动安装...")
         try:
@@ -25,6 +24,7 @@ def install_requirements():
             print("setuptools安装完成.")
         except Exception as e:
             print(f"setuptools安装失败：{e}\n请手动运行 pip install setuptools")
+            input("按任意键退出...")  # 让用户看到错误信息
             sys.exit(1)
 
     req_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
@@ -44,7 +44,11 @@ def install_requirements():
             print("依赖安装完成。")
         except Exception as e:
             print(f"依赖安装失败：{e}\n请手动运行 pip install -r requirements.txt")
+            input("按任意键退出...")  # 让用户看到错误信息
             sys.exit(1)
+
+    # 如果执行到这里，依赖检查完成
+    print("依赖检查完毕，程序即将启动...")
 
 install_requirements()
 

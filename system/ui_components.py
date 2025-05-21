@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -9,7 +10,8 @@ class RoundedButton(tk.Canvas):
     """圆角按钮实现 - 选中时在左侧显示高亮指示条"""
 
     def __init__(self, parent, text="", command=None, bg="#2c3e50", fg="#ffffff",
-                 width=160, height=40, radius=10, highlight_color="#ffffff", **kwargs):
+                 width=160, height=40, radius=10, highlight_color="#ffffff",
+                 show_indicator=True, **kwargs):
         """初始化圆角按钮
 
         Args:
@@ -23,12 +25,32 @@ class RoundedButton(tk.Canvas):
             radius: 圆角半径
             highlight_color: 高亮指示条颜色
         """
+        # 安全地获取父组件背景色
+        parent_bg = '#ffffff'  # 默认白色背景
+
+        try:
+            # 尝试多种方法获取父组件背景色
+            if hasattr(parent, 'winfo_rgb'):
+                try:
+                    # 使用标准的tk方法获取实际背景色
+                    parent_bg = parent.cget('background')
+                except Exception:
+                    # 某些ttk组件使用'bg'而不是'background'
+                    try:
+                        parent_bg = parent.cget('bg')
+                    except Exception:
+                        pass
+        except Exception:
+            pass  # 忽略所有错误，使用默认背景色
+
+        # 创建Canvas
         super().__init__(
             parent,
             width=width,
             height=height,
-            bg=bg,
+            bg=parent_bg,  # 使用获取的背景色
             highlightthickness=0,
+            bd=0,  # 无边框
             **kwargs
         )
 
@@ -41,6 +63,8 @@ class RoundedButton(tk.Canvas):
         self.height = height
         self.active = False  # 默认非激活状态
         self.highlight_color = highlight_color
+        self.parent_bg = parent_bg  # 保存父组件背景色
+        self.show_indicator = show_indicator  # 是否显示左侧高亮指示条
 
         # 计算悬停状态的颜色
         r, g, b = [int(self.bg[i:i + 2], 16) for i in (1, 3, 5)]
@@ -61,6 +85,39 @@ class RoundedButton(tk.Canvas):
         self.bind("<ButtonRelease-1>", self._on_release)
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
+
+    def _on_press(self, event):
+        """按钮按下事件处理"""
+        self._draw_button("active")
+
+    def _on_release(self, event):
+        """按钮释放事件处理"""
+        self._draw_button("hover")
+        if self.command:
+            self.command()
+
+    def _on_enter(self, event):
+        """鼠标进入事件处理"""
+        self._draw_button("hover")
+
+    def _on_leave(self, event):
+        """鼠标离开事件处理"""
+        if not self.active:
+            self._draw_button("normal")
+        else:
+            self._draw_button("active")
+
+    def set_active(self, active=True):
+        """设置按钮激活状态
+
+        Args:
+            active: 是否激活
+        """
+        self.active = active
+        if active:
+            self._draw_button("active")
+        else:
+            self._draw_button("normal")
 
     def _draw_button(self, state="normal"):
         """绘制按钮，根据状态使用不同的背景色
@@ -129,7 +186,7 @@ class RoundedButton(tk.Canvas):
         )
 
         # 如果是激活状态，添加左侧高亮指示条
-        if state == "active":
+        if state == "active" and self.show_indicator:
             # 设置缩短的高亮指示条参数
             indicator_width = 2  # 指示条宽度
             indicator_height = height * 0.6  # 指示条高度为按钮高度的60%
@@ -175,7 +232,7 @@ class RoundedButton(tk.Canvas):
             self.create_arc(
                 x_left,  # 与上半圆使用完全相同的x坐标
                 indicator_y_offset + indicator_height - circle_diameter,
-                circle_diameter*0.75,  # 与上半圆使用完全相同的宽度
+                circle_diameter * 0.75,  # 与上半圆使用完全相同的宽度
                 indicator_y_offset + indicator_height,
                 start=180,
                 extent=180,  # 180度弧，形成半圆
@@ -184,7 +241,7 @@ class RoundedButton(tk.Canvas):
                 tags="highlight"
             )
 
-            # 绘制文本
+        # 绘制文本
         self.text_id = self.create_text(
             width // 2,
             height // 2,
@@ -194,32 +251,6 @@ class RoundedButton(tk.Canvas):
             anchor="center",
             tags="text"
         )
-
-    def set_active(self, active):
-        """设置按钮是否处于激活状态"""
-        self.active = active
-        self._draw_button("active" if active else "normal")
-
-    def _on_press(self, event):
-        """按下按钮事件处理"""
-        # 执行命令
-        if self.command:
-            self.command()
-
-    def _on_release(self, event):
-        """释放按钮事件处理"""
-        pass
-
-    def _on_enter(self, event):
-        """鼠标进入事件处理"""
-        # 如果不是激活状态，显示悬停效果
-        if not self.active:
-            self._draw_button("hover")
-
-    def _on_leave(self, event):
-        """鼠标离开事件处理"""
-        # 恢复正常或激活状态
-        self._draw_button("active" if self.active else "normal")
 
 class ModernFrame(ttk.Frame):
     """现代风格框架"""
@@ -235,26 +266,244 @@ class InfoBar(ttk.Frame):
         self.status_label = ttk.Label(self, text="就绪", padding=(10, 5))
         self.status_label.pack(side="left")
 
+
 class SpeedProgressBar(ttk.Frame):
-    """带速度显示的进度条"""
+    def __init__(self, parent):
+        """自定义进度框架组件
 
-    def __init__(self, parent, **kwargs):
-        """初始化进度条"""
-        super().__init__(parent, **kwargs)
+        Args:
+            parent: 父容器
+        """
+        super().__init__(parent)
+        self.parent = parent
 
-        self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(
-            self, orient="horizontal", length=300, mode="determinate", variable=self.progress_var)
-        self.progress_bar.pack(side="left", fill="x", expand=True)
+        # 进度条相关变量
+        self.progress_var = tk.IntVar(value=0)
+        self.total_var = tk.IntVar(value=100)  # 默认总数为100
+        self.canvas = None
+        self.speed_label = None
+        self.time_label = None
+        self.progress_label = None
 
-        self.info_frame = ttk.Frame(self)
-        self.info_frame.pack(side="right", padx=(10, 0))
+        # 获取系统强调色或从父窗口继承
+        self.accent_color = self._get_accent_color()
 
-        self.speed_label = ttk.Label(self.info_frame, text="", width=15)
-        self.speed_label.pack(side="top", anchor="e")
+        # 创建界面
+        self._create_widgets()
 
-        self.time_label = ttk.Label(self.info_frame, text="", width=15)
-        self.time_label.pack(side="bottom", anchor="e")
+        # 默认隐藏
+        self.hide()
+
+    def _get_accent_color(self):
+        """获取系统强调色或从父窗口继承强调色"""
+        try:
+            # 首先尝试从父窗口或祖先窗口获取强调色
+            parent = self.parent
+            while parent:
+                if hasattr(parent, 'accent_color') and parent.accent_color:
+                    return parent.accent_color
+                elif hasattr(parent, 'sidebar_bg') and parent.sidebar_bg:  # 侧边栏背景色
+                    return parent.sidebar_bg
+                elif hasattr(parent, 'master') and parent.master:
+                    parent = parent.master
+                else:
+                    break
+
+            # 尝试获取系统强调色
+            if sys.platform == 'win32':
+                try:
+                    import winreg
+                    registry = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
+
+                    # 尝试第一种注册表路径
+                    try:
+                        key = winreg.OpenKey(registry, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Accent")
+                        accent_data = winreg.QueryValueEx(key, "AccentColorMenu")[0]
+                        accent_int = int.from_bytes(accent_data[:-2], byteorder='little')
+                        b = accent_int & 255
+                        g = (accent_int >> 8) & 255
+                        r = (accent_int >> 16) & 255
+                        return f"#{r:02x}{g:02x}{b:02x}"
+                    except:
+                        pass
+
+                    # 尝试第二种注册表路径
+                    try:
+                        key = winreg.OpenKey(registry, r"SOFTWARE\Microsoft\Windows\DWM")
+                        accent_data = winreg.QueryValueEx(key, "ColorizationColor")[0]
+                        r = (accent_data >> 16) & 255
+                        g = (accent_data >> 8) & 255
+                        b = accent_data & 255
+                        return f"#{r:02x}{g:02x}{b:02x}"
+                    except:
+                        pass
+                except:
+                    pass
+
+            # 尝试从主题中获取
+            try:
+                style = ttk.Style()
+                if hasattr(style, 'accent_color'):
+                    return style.accent_color
+            except:
+                pass
+
+            # 默认返回绿色作为强调色
+            return "#2ecc71"
+        except:
+            return "#2ecc71"  # 默认绿色
+
+    def _create_widgets(self):
+        """创建进度框架的小部件"""
+        # 创建一个框架包含所有进度相关组件
+        main_frame = ttk.Frame(self)
+        main_frame.pack(fill="x", expand=True, padx=5, pady=5)
+
+        # 初始化标签（此前缺失的部分）
+        self.speed_label = ttk.Label(self, text="速度: 0.00 张/秒")
+        self.time_label = ttk.Label(self, text="剩余时间: 0秒")
+        self.progress_label = ttk.Label(self, text="0%")
+
+        # 进度条 - 使用Canvas绘制，填充整个可用宽度
+        self.canvas = tk.Canvas(main_frame, height=25,
+                                bg="#E0E0E0", highlightthickness=0)
+        self.canvas.pack(side="top", fill="x", expand=True)
+
+        # 绑定大小改变事件，以便在窗口大小调整时重绘进度条
+        self.canvas.bind("<Configure>", lambda e: self._draw_progressbar())
+
+        # 初次绘制进度条
+        self._draw_progressbar()
+
+    def _draw_progressbar(self):
+        """绘制进度条"""
+        self.canvas.delete("all")
+
+        # 获取当前的进度和总数
+        current = self.progress_var.get()
+        total = self.total_var.get() if self.total_var.get() > 0 else 1
+
+        # 确保进度不超过总数
+        current = min(current, total)
+
+        # 计算进度比例
+        progress_ratio = current / total
+
+        # 获取画布当前宽度和高度
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+
+        if canvas_width <= 1:  # 初始化时可能未布局完成
+            canvas_width = self.master.winfo_width() - 20  # 估算值，减去边距
+            if canvas_width <= 1:
+                canvas_width = 400  # 默认值
+
+        # 计算进度条宽度
+        bar_width = int(canvas_width * progress_ratio)
+
+        # 绘制背景 (浅灰色) - 贯穿整个宽度
+        self.canvas.create_rectangle(0, 0, canvas_width, canvas_height,
+                                     fill="#E0E0E0", outline="")
+
+        # 确保获取有效的强调色
+        accent_color = self._get_accent_color()
+        if not accent_color or not accent_color.startswith('#'):
+            # 如果强调色无效，使用默认绿色
+            accent_color = "#2ecc71"
+
+        # 使用系统强调色绘制进度条
+        if bar_width > 0:
+            self.canvas.create_rectangle(0, 0, bar_width, canvas_height,
+                                         fill=accent_color, outline="")
+
+        # 绘制进度百分比和处理数量文字 - 居中显示
+        percentage = int(progress_ratio * 100)
+        text_x = canvas_width // 2
+        text_y = canvas_height // 2
+
+        # 计算文字颜色 - 在进度条较长时使用白色文字，否则使用黑色
+        if bar_width > text_x:
+            text_color = "white"  # 在强调色背景上使用白色文字
+        else:
+            text_color = "black"  # 在灰色背景上使用黑色文字
+
+        # 绘制中间的百分比文字
+        self.canvas.create_text(text_x, text_y, text=f"{percentage}% ({current}/{total})",
+                                fill=text_color, font=("Segoe UI", 9))
+
+        # 获取速度和剩余时间文本
+        speed_text = self.speed_label.cget("text").replace("速度: ", "")
+        time_text = self.time_label.cget("text").replace("剩余时间: ", "")
+
+        # 计算右侧信息文本
+        right_text = f"{speed_text} | {time_text}"
+
+        # 绘制右侧信息文字 - 在进度条内部右侧
+        right_margin = 10  # 右边距
+        text_right_x = canvas_width - right_margin
+
+        # 根据进度条位置决定文字颜色
+        if bar_width > canvas_width - 120:  # 估计右侧文本宽度约120px
+            right_text_color = "white"  # 在强调色背景上使用白色文字
+        else:
+            right_text_color = "black"  # 在灰色背景上使用黑色文字
+
+        # 绘制右侧信息文字
+        self.canvas.create_text(text_right_x, text_y, text=right_text,
+                                fill=right_text_color, font=("Segoe UI", 11, "bold"),
+                                anchor="e")  # 右对齐
+
+    def show(self):
+        """显示进度条"""
+        self.pack(fill="x", expand=True, padx=5, pady=5)
+        self.update_idletasks()
+
+    def hide(self):
+        """隐藏进度条"""
+        self.pack_forget()
+
+    def update_progress(self, value, total=None, speed=None, remaining_time=None):
+        """更新进度条数值、速度和剩余时间
+
+        Args:
+            value: 当前进度值
+            total: 总进度值（可选）
+            speed: 处理速度（可选，每秒处理数量）
+            remaining_time: 剩余时间（可选，字符串或秒数）
+        """
+        # 更新总数（如果提供）
+        if total is not None:
+            self.total_var.set(max(1, total))  # 确保总数至少为1
+
+        # 更新当前进度
+        self.progress_var.set(value)
+
+        # 更新速度标签（如果提供）
+        if speed is not None:
+            self.speed_label.config(text=f"速度: {speed:.2f} 张/秒")
+
+        # 更新剩余时间标签（如果提供）
+        if remaining_time is not None:
+            if isinstance(remaining_time, (int, float)):
+                # 如果是数值，转换为友好格式
+                if remaining_time > 60:
+                    minutes = int(remaining_time // 60)
+                    seconds = int(remaining_time % 60)
+                    time_text = f"剩余时间: {minutes}分{seconds}秒"
+                else:
+                    time_text = f"剩余时间: {int(remaining_time)}秒"
+            else:
+                # 如果是字符串，直接显示
+                time_text = f"剩余时间: {remaining_time}"
+
+            self.time_label.config(text=time_text)
+
+        # 重绘进度条
+        self._draw_progressbar()
+
+        # 确保更新显示
+        self.update_idletasks()
+
 
 
 class CollapsiblePanel(ttk.Frame):

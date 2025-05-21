@@ -30,7 +30,7 @@ from system.utils import resource_path
 from system.image_processor import ImageProcessor
 from system.metadata_extractor import ImageMetadataExtractor
 from system.data_processor import DataProcessor
-from system.ui_components import ModernFrame, InfoBar, SpeedProgressBar, CollapsiblePanel
+from system.ui_components import ModernFrame, InfoBar, SpeedProgressBar, CollapsiblePanel, RoundedButton
 from system.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
@@ -402,7 +402,7 @@ class ObjectDetectionGUI:
         self.content_frame.rowconfigure(0, weight=1)
 
         # 创建各个页面
-        self._create_settings_page()
+        self._create_start_page()
         self._create_preview_page()
         self._create_advanced_page()
         self._create_about_page()
@@ -467,7 +467,7 @@ class ObjectDetectionGUI:
 
         # 定义菜单项
         menu_items = [
-            ("settings", "基本设置"),
+            ("settings", "开始"),
             ("preview", "图像预览"),
             ("advanced", "高级设置"),
             ("about", "关于")
@@ -546,13 +546,17 @@ class ObjectDetectionGUI:
         # 保存当前页面ID
         self.current_page = page_id
 
-    def _create_settings_page(self) -> None:
+    def _create_start_page(self) -> None:
         """创建基本设置页面"""
+
+        sidebar_bg = self.sidebar_bg if hasattr(self, 'sidebar_bg') else self.accent_color
+        sidebar_fg = self.sidebar_fg if hasattr(self, 'sidebar_fg') else "#ffffff"
+
         self.settings_page = ttk.Frame(self.content_frame)
 
-        # 设置settings_page的布局，使底部元素可以定位在右下角
+        # 调整网格布局，为每个区域分配固定的行
         self.settings_page.columnconfigure(0, weight=1)
-        self.settings_page.rowconfigure(2, weight=1)  # 给中间区域分配权重，使底部保持在底部
+        self.settings_page.rowconfigure(3, weight=1)  # 中间区域弹性增长
 
         # 路径设置区域
         paths_frame = ttk.LabelFrame(self.settings_page, text="路径设置")
@@ -618,55 +622,44 @@ class ObjectDetectionGUI:
             options_container, text="按物种分类图片", variable=self.copy_img_var)
         copy_img_switch.grid(row=2, column=0, sticky="w", pady=5, padx=10)
 
-        # 添加一个空白框架作为占位符，使底部元素保持在底部
+        # 添加一个占位空间框架，可以弹性扩展
         spacer = ttk.Frame(self.settings_page)
-        spacer.grid(row=2, column=0, sticky="nsew")
+        spacer.grid(row=3, column=0, sticky="nsew")
 
-        # 处理控制区域 - 使用grid布局放在底部
-        process_frame = ttk.Frame(self.settings_page)
-        process_frame.grid(row=3, column=0, sticky="ew", padx=20, pady=20)
-        process_frame.columnconfigure(0, weight=1)  # 让进度条占据大部分空间
+        # 底部控制区域 - 使用固定的网格布局
+        # 创建一个容器框架，将进度条和按钮分开放置
+        bottom_frame = ttk.Frame(self.settings_page)
+        bottom_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(10, 20))
+        bottom_frame.columnconfigure(0, weight=1)  # 使进度条可以水平扩展
 
-        # 进度条和信息 - 使用修改后的SpeedProgressBar
-        self.progress_frame = SpeedProgressBar(process_frame)
-        self.progress_frame.grid(row=0, column=0, sticky="ew", pady=10)
+        # 创建固定空间的进度条区域（不论显示与否都占据空间）
+        progress_container = ttk.Frame(bottom_frame, height=50)
+        progress_container.grid(row=1, column=0, sticky="ew")
+        progress_container.grid_propagate(False)  # 防止尺寸变化
 
-        # 创建按钮样式
-        style = ttk.Style()
+        # 进度条放在固定的容器中
+        self.progress_frame = SpeedProgressBar(progress_container)
+        self.progress_frame.pack(fill="both", expand=True)
+        self.progress_frame.hide()  # 初始状态为隐藏
 
-        # 安全地获取系统强调色
-        accent_color = getattr(self, 'accent_color', "#0078d7")  # 默认为微软蓝
+        # 按钮单独放在另一行，位置固定
+        button_container = ttk.Frame(bottom_frame)
+        button_container.grid(row=0, column=0, sticky="ew", pady=(10, 0))
+        button_container.columnconfigure(1, weight=1)  # 使按钮保持右对齐
 
-        # 确定文本颜色 - 根据背景色亮度
-        try:
-            # 将十六进制颜色转换为RGB
-            r = int(accent_color[1:3], 16)
-            g = int(accent_color[3:5], 16)
-            b = int(accent_color[5:7], 16)
-
-            # 计算亮度
-            brightness = (r * 299 + g * 587 + b * 114) / 1000
-
-            # 亮度高于128使用黑色文字，否则使用白色文字
-            text_color = "#000000" if brightness > 128 else "#ffffff"
-        except:
-            # 如果转换失败，默认使用白色文本
-            text_color = "#ffffff"
-
-        # 创建自定义按钮样式
-        style.configure("Accent.TButton",
-                        background=accent_color,
-                        foreground=text_color,
-                        font=("Segoe UI", 11, "bold"))
-
-        # 开始处理按钮 - 放置在右下角，使用系统强调色
-        self.start_stop_button = ttk.Button(
-            process_frame,
-            text="▶ 开始处理",
+        # 按钮放在右侧
+        self.start_stop_button = RoundedButton(
+            button_container,  # 使用button_container作为父容器
+            text="▶️开始处理",
+            bg=sidebar_bg,  # 使用绿色背景
+            fg=sidebar_fg,  # 白色文字
+            width=160,  # 设置宽度
+            height=80,  # 设置高度
+            radius=20,  # 设置圆角半径
             command=self.toggle_processing_state,
-            style="Accent.TButton",
-            width=15)
-        self.start_stop_button.grid(row=0, column=1, padx=(10, 0), sticky="e")
+            show_indicator=False
+        )
+        self.start_stop_button.grid(row=0, column=1, sticky="e")
 
     def _create_preview_page(self) -> None:
         """创建图像预览页面"""
@@ -3441,16 +3434,19 @@ class ObjectDetectionGUI:
         Args:
             is_processing: 是否正在处理
         """
+        sidebar_bg = self.sidebar_bg if hasattr(self, 'sidebar_bg') else self.accent_color
         self.is_processing = is_processing
 
-        # 更新UI状态
         if is_processing:
-            self.start_stop_button.config(text="停止处理")
+            # 设置为处理中状态
+            self.progress_frame.update_progress(0)  # 使用正确的方法名 update_progress
+            self.progress_frame.show()
+            self.start_stop_button.bg = "#e74c3c"  # 设置背景色
+            self.start_stop_button.text = "停止处理"  # 设置文本
+            self.start_stop_button._draw_button("normal")  # 重绘按钮
+
+            # 更新状态栏文本
             self.status_bar.status_label.config(text="正在处理图像...")
-            self.progress_frame.progress_var.set(0)
-            self.progress_frame.speed_label.config(text="")
-            self.progress_frame.time_label.config(text="")
-            self.processing_stop_flag.clear()
 
             # 禁用配置选项
             for widget in (self.file_path_entry, self.file_path_button,
@@ -3471,10 +3467,18 @@ class ObjectDetectionGUI:
 
             # 自动打开显示检测结果开关
             self.show_detection_var.set(True)
+
+            # 清除停止标志
+            self.processing_stop_flag.clear()
         else:
-            self.start_stop_button.config(text="开始处理")
-            self.progress_frame.speed_label.config(text="")
-            self.progress_frame.time_label.config(text="")
+            # 设置为未处理状态
+            self.progress_frame.update_progress(0)  # 重置进度
+            self.progress_frame.hide()  # 隐藏进度条
+            self.start_stop_button.bg = sidebar_bg
+            self.start_stop_button.text = "开始处理"
+            self.start_stop_button._draw_button("normal")
+            self.progress_frame.update_progress(0)
+            self.progress_frame.hide()
 
             # 更新状态栏文本
             if self.processing_stop_flag.is_set():
@@ -3509,20 +3513,15 @@ class ObjectDetectionGUI:
             resume_from: 从第几张图片开始处理，用于继续上次未完成的处理
         """
         # 计算合适的开始时间，考虑已处理的图片
-        if resume_from > 0:
-            # 如果是继续处理，根据平均处理时间估算之前处理所花费的时间
-            # 假设每张图片的处理时间为0.5秒（可根据实际情况调整）
-            estimated_previous_time = resume_from * 0.5  # 估算之前处理所花的时间
-            start_time = time.time() - estimated_previous_time  # 调整开始时间点
-        else:
-            start_time = time.time()  # 新任务直接使用当前时间
+        start_time = time.time()  # 不管是否是继续处理，开始时间都是现在
+        elapsed_adjustment = 0  # 对于继续处理的情况，将使用这个值调整时间计算
 
         excel_data = [] if resume_from == 0 else getattr(self, 'excel_data', [])
         processed_files = resume_from
         stopped_manually = False
         earliest_date = None
-        cache_interval = 10  # 每处理10张图片保存一次缓存
-        timeout_error_occurred = False  # 新增标志，用于跟踪是否出现超时错误
+        cache_interval = 1  # 每处理10张图片保存一次缓存
+        timeout_error_occurred = False  # 跟踪是否出现超时错误
 
         try:
             # 获取高级设置参数
@@ -3540,7 +3539,14 @@ class ObjectDetectionGUI:
             image_files = self._get_image_files(file_path)
 
             total_files = len(image_files)
-            self.progress_frame.progress_bar["maximum"] = total_files
+
+            # 初始化进度条
+            self.master.after(0, lambda: self.progress_frame.update_progress(
+                value=processed_files,
+                total=total_files,
+                speed=0.0,
+                remaining_time="计算中..."
+            ))
 
             if not image_files:
                 self.status_bar.status_label.config(text="未找到任何图片文件。")
@@ -3558,10 +3564,13 @@ class ObjectDetectionGUI:
                             if earliest_date is None or item['拍摄日期对象'] < earliest_date:
                                 earliest_date = item['拍摄日期对象']
 
-                # 立即更新进度显示，显示已加载的进度
-                self._update_progress(processed_files, total_files, start_time)
+                # 估算之前已处理的时间（假设每张图片平均处理时间为0.5秒）
+                elapsed_adjustment = resume_from * 0.5
 
-            # 处理每张图片
+                # 处理每张图片
+            last_update_time = time.time()  # 用于限制UI更新频率
+            update_interval = 0.1  # UI更新最小时间间隔(秒)
+
             for filename in image_files:
                 if self.processing_stop_flag.is_set():
                     stopped_manually = True
@@ -3569,21 +3578,42 @@ class ObjectDetectionGUI:
 
                 try:
                     # 更新UI显示当前处理的文件
-                    self.master.after(0, lambda f=filename: self.status_bar.status_label.config(
-                        text=f"正在处理: {f} (FP16加速: {fp16_status})"))
+                    current_time = time.time()
+                    if current_time - last_update_time > update_interval:
+                        self.master.after(0, lambda f=filename: self.status_bar.status_label.config(
+                            text=f"正在处理: {f} (FP16加速: {fp16_status})"))
 
-                    # 选中当前文件并滚动到可见处
-                    try:
-                        idx = self.file_listbox.get(0, tk.END).index(filename)
-                        self.file_listbox.selection_clear(0, tk.END)
-                        self.file_listbox.selection_set(idx)
-                        self.file_listbox.see(idx)
+                        # 计算并更新处理速度和剩余时间
+                        if processed_files > 0:
+                            actual_elapsed = current_time - start_time + elapsed_adjustment
+                            speed = processed_files / actual_elapsed
+                            remaining_files = total_files - processed_files
+                            estimated_time_remaining = remaining_files / speed if speed > 0 else 0
 
-                        # 更新预览
-                        img_path = os.path.join(file_path, filename)
-                        self.master.after(0, lambda p=img_path: self.update_image_preview(p))
-                    except (ValueError, Exception) as e:
-                        logger.debug(f"更新列表选择失败: {e}")
+                            # 更新进度条
+                            self.master.after(0, lambda p=processed_files, t=total_files, s=speed,
+                                                        r=estimated_time_remaining:
+                            self.progress_frame.update_progress(
+                                value=p,
+                                total=t,
+                                speed=s,
+                                remaining_time=r
+                            ))
+
+                        # 选中当前文件并滚动到可见处
+                        try:
+                            idx = self.file_listbox.get(0, tk.END).index(filename)
+                            self.file_listbox.selection_clear(0, tk.END)
+                            self.file_listbox.selection_set(idx)
+                            self.file_listbox.see(idx)
+
+                            # 更新预览
+                            img_path = os.path.join(file_path, filename)
+                            self.master.after(0, lambda p=img_path: self.update_image_preview(p))
+                        except (ValueError, Exception) as e:
+                            logger.debug(f"更新列表选择失败: {e}")
+
+                        last_update_time = current_time
 
                     # 处理单张图片
                     img_path = os.path.join(file_path, filename)
@@ -3600,7 +3630,6 @@ class ObjectDetectionGUI:
                         timeout=10.0  # 设置超时
                     )
 
-                    # 如果是不会超时错误外的异常，处理照常进行
                     # 更新图像信息
                     image_info.update(species_info)
 
@@ -3618,10 +3647,6 @@ class ObjectDetectionGUI:
                         species_info['检测时间'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         # 保存检测结果JSON
                         self.image_processor.save_detection_info_json(detect_results, filename, species_info)
-
-                    # 保存检测结果到临时目录
-                    if detect_results:
-                        self.image_processor.save_detection_temp(detect_results, filename)
 
                     # 更新最早日期
                     if image_info.get('拍摄日期对象'):
@@ -3645,69 +3670,20 @@ class ObjectDetectionGUI:
 
                 # 更新进度
                 processed_files += 1
-                self._update_progress(processed_files, total_files, start_time)
 
                 # 每处理cache_interval张图片保存一次缓存
                 if processed_files % cache_interval == 0:
-                    try:
-                        # 确保temp目录存在
-                        temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
-                        if not os.path.exists(temp_dir):
-                            os.makedirs(temp_dir)
+                    self._save_processing_cache(excel_data, file_path, save_path, save_detect_image, output_excel,
+                                                copy_img, use_fp16, processed_files, total_files)
 
-                        cache_file = os.path.join(temp_dir, "cache.json")
-
-                        # 处理excel_data中的不可序列化对象
-                        serializable_excel_data = []
-                        for item in excel_data:
-                            serializable_item = {}
-                            for key, value in item.items():
-                                # 处理datetime对象
-                                if isinstance(value, datetime):
-                                    serializable_item[key] = value.isoformat()
-                                # 处理Results对象 - 不保存它们，因为它们不需要用于恢复处理
-                                elif key == 'detect_results':
-                                    # 跳过Results对象，不保存到缓存中
-                                    continue
-                                # 其他基本类型可以直接保存
-                                elif isinstance(value, (str, int, float, bool, type(None))):
-                                    serializable_item[key] = value
-                                # 如果是列表或字典，尝试保存，但不保存其中的复杂对象
-                                elif isinstance(value, (list, dict)):
-                                    try:
-                                        # 测试是否可以序列化
-                                        json.dumps(value)
-                                        serializable_item[key] = value
-                                    except TypeError:
-                                        # 如果无法序列化，则跳过
-                                        continue
-                                else:
-                                    # 对于其他无法序列化的对象，转换为字符串
-                                    try:
-                                        serializable_item[key] = str(value)
-                                    except:
-                                        continue
-                            serializable_excel_data.append(serializable_item)
-
-                        cache_data = {
-                            'file_path': file_path,
-                            'save_path': save_path,
-                            'save_detect_image': save_detect_image,
-                            'output_excel': output_excel,
-                            'copy_img': copy_img,
-                            'use_fp16': use_fp16,
-                            'processed_files': processed_files,
-                            'total_files': total_files,
-                            'excel_data': serializable_excel_data,
-                            'timestamp': time.time()
-                        }
-
-                        with open(cache_file, 'w', encoding='utf-8') as f:
-                            json.dump(cache_data, f, ensure_ascii=False, indent=4)
-
-                        logger.info(f"处理进度已缓存: {processed_files}/{total_files}")
-                    except Exception as e:
-                        logger.error(f"保存处理缓存失败: {e}")
+            # 最终更新进度条到100%完成状态
+            if not stopped_manually and not timeout_error_occurred:
+                self.master.after(0, lambda: self.progress_frame.update_progress(
+                    value=total_files,
+                    total=total_files,
+                    speed=0.0,
+                    remaining_time="已完成"
+                ))
 
             # 保存用于后续处理的Excel数据
             self.excel_data = excel_data
@@ -3729,14 +3705,8 @@ class ObjectDetectionGUI:
                 self._export_and_open_excel(excel_data, save_path)
 
             # 删除缓存文件
-            try:
-                temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
-                cache_file = os.path.join(temp_dir, "cache.json")
-                if os.path.exists(cache_file) and not stopped_manually and not timeout_error_occurred:
-                    os.remove(cache_file)
-                    logger.info("处理完成，缓存文件已删除")
-            except Exception as e:
-                logger.error(f"删除缓存文件失败: {e}")
+            if not stopped_manually and not timeout_error_occurred:
+                self._delete_processing_cache()
 
             # 完成处理
             if not stopped_manually and not timeout_error_occurred:
@@ -4239,3 +4209,89 @@ class ObjectDetectionGUI:
         except Exception as e:
             logger.error(f"检查检测结果失败: {e}")
             return False
+
+    def _save_processing_cache(self, excel_data, file_path, save_path, save_detect_image, output_excel,
+                               copy_img, use_fp16, processed_files, total_files):
+        """保存处理缓存到文件
+
+        Args:
+            excel_data: Excel数据列表
+            file_path: 文件路径
+            save_path: 保存路径
+            save_detect_image: 是否保存检测图像
+            output_excel: 是否输出Excel
+            copy_img: 是否复制图像按物种分类
+            use_fp16: 是否使用FP16加速
+            processed_files: 已处理文件数
+            total_files: 总文件数
+        """
+        try:
+            # 确保temp目录存在
+            temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+            if not os.path.exists(temp_dir):
+                os.makedirs(temp_dir)
+
+            cache_file = os.path.join(temp_dir, "cache.json")
+
+            # 处理excel_data中的不可序列化对象
+            serializable_excel_data = []
+            for item in excel_data:
+                serializable_item = {}
+                for key, value in item.items():
+                    # 处理datetime对象
+                    if isinstance(value, datetime):
+                        serializable_item[key] = value.isoformat()
+                    # 处理Results对象 - 不保存它们，因为它们不需要用于恢复处理
+                    elif key == 'detect_results':
+                        # 跳过Results对象，不保存到缓存中
+                        continue
+                    # 其他基本类型可以直接保存
+                    elif isinstance(value, (str, int, float, bool, type(None))):
+                        serializable_item[key] = value
+                    # 如果是列表或字典，尝试保存，但不保存其中的复杂对象
+                    elif isinstance(value, (list, dict)):
+                        try:
+                            # 测试是否可以序列化
+                            json.dumps(value)
+                            serializable_item[key] = value
+                        except TypeError:
+                            # 如果无法序列化，则跳过
+                            continue
+                    else:
+                        # 对于其他无法序列化的对象，转换为字符串
+                        try:
+                            serializable_item[key] = str(value)
+                        except:
+                            continue
+                serializable_excel_data.append(serializable_item)
+
+            cache_data = {
+                'file_path': file_path,
+                'save_path': save_path,
+                'save_detect_image': save_detect_image,
+                'output_excel': output_excel,
+                'copy_img': copy_img,
+                'use_fp16': use_fp16,
+                'processed_files': processed_files,
+                'total_files': total_files,
+                'excel_data': serializable_excel_data,
+                'timestamp': time.time()
+            }
+
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=4)
+
+            logger.info(f"处理进度已缓存: {processed_files}/{total_files}")
+        except Exception as e:
+            logger.error(f"保存处理缓存失败: {e}")
+
+    def _delete_processing_cache(self):
+        """删除处理缓存文件"""
+        try:
+            temp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "temp")
+            cache_file = os.path.join(temp_dir, "cache.json")
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+                logger.info("处理完成，缓存文件已删除")
+        except Exception as e:
+            logger.error(f"删除缓存文件失败: {e}")
