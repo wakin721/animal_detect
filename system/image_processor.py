@@ -199,7 +199,7 @@ class ImageProcessor:
         return "unknown"
 
     def save_detection_temp(self, results: Any, image_name: str) -> str:
-        """保存探测结果图片到临时目录
+        """保存探测结果图片到临时目录，并进行压缩以节省空间
 
         Args:
             results: YOLO检测结果
@@ -220,7 +220,19 @@ class ImageProcessor:
             # 保存结果图像
             result_file = os.path.join(photo_path, image_name)
             for c, h in enumerate(results):
-                h.save(filename=result_file)
+                # 获取图像并转换为PIL.Image
+                from PIL import Image
+                import numpy as np
+
+                # 获取结果图像
+                result_img = h.plot()
+                result_img = Image.fromarray(result_img[..., ::-1])  # BGR->RGB
+
+                # 压缩图像以节省空间
+                compressed_img, quality = self._compress_image_for_temp(result_img)
+
+                # 保存压缩后的图像
+                compressed_img.save(result_file, "JPEG", quality=quality)
                 return result_file  # 返回保存的文件路径
         except Exception as e:
             logger.error(f"保存临时检测结果图片失败: {e}")
@@ -306,3 +318,34 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"加载模型失败: {e}")
             raise Exception(f"加载模型失败: {e}")
+
+    def _compress_image_for_temp(self, img, max_width=1280, quality=85):
+        """压缩图像以节省临时存储空间
+
+        Args:
+            img: 图像对象（PIL.Image或numpy数组）
+            max_width: 最大宽度，保持宽高比
+            quality: JPEG质量（1-100）
+
+        Returns:
+            压缩后的图像，质量参数
+        """
+        try:
+            from PIL import Image
+            import numpy as np
+
+            # 如果是numpy数组，转换为PIL.Image
+            if isinstance(img, np.ndarray):
+                img = Image.fromarray(img)
+
+            # 计算调整后的尺寸
+            width, height = img.size
+            if width > max_width:
+                ratio = max_width / width
+                new_height = int(height * ratio)
+                img = img.resize((max_width, new_height), Image.LANCZOS)
+
+            return img, quality
+        except Exception as e:
+            logger.error(f"压缩图像失败: {e}")
+            return img, 95  # 发生错误时返回原图和默认质量
