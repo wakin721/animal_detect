@@ -1758,10 +1758,10 @@ class ObjectDetectionGUI:
         # PyTorch版本选择下拉框
         self.pytorch_version_var = tk.StringVar()
         versions = [
-            "2.7.0 (CUDA 12.8)",
-            "2.7.0 (CUDA 12.6)",
-            "2.7.0 (CUDA 11.8)",
-            "2.7.0 (CPU Only)",
+            "2.7.1 (CUDA 12.8)",
+            "2.7.1 (CUDA 12.6)",
+            "2.7.1 (CUDA 11.8)",
+            "2.7.1 (CPU Only)",
         ]
 
         # 设置下拉框样式
@@ -2546,6 +2546,10 @@ class ObjectDetectionGUI:
         # 作者信息
         author_label = ttk.Label(about_content, text="作者：和錦わきん", font=NORMAL_FONT)
         author_label.pack(pady=5)
+
+        # 新增更新按钮
+        update_button = ttk.Button(about_content, text="检查更新", command=self._check_for_updates)
+        update_button.pack(pady=20)
 
     def _bind_events(self) -> None:
         """绑定事件处理函数"""
@@ -4307,3 +4311,8 @@ class ObjectDetectionGUI:
                 logger.info("处理完成，缓存文件已删除")
         except Exception as e:
             logger.error(f"删除缓存文件失败: {e}")
+
+    def _check_for_updates(self):
+        """UI按钮调用的更新检查函数。"""
+        from system.update_checker import check_for_updates
+        check_for_updates(self.master)

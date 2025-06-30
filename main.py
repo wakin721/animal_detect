@@ -416,6 +416,16 @@ def main():
         # 延迟启动处理，确保UI已完全加载
         root.after(1000, lambda: app.start_processing(resume_from=resume_from))
 
+    # 在程序启动时，后台检查更新
+    def startup_update_check():
+        from system.update_checker import check_for_updates
+        # 静默检查，只有在有更新时才会提示
+        check_for_updates(root, silent=True)
+
+    import threading
+    update_thread = threading.Thread(target=startup_update_check, daemon=True)
+    update_thread.start()
+
     # 启动主循环
     root.mainloop()
 
