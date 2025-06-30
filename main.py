@@ -11,21 +11,168 @@ import subprocess
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-# 自动安装依赖
+def setup_virtual_environment():
+    """设置虚拟环境"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    venv_dir = os.path.join(base_dir, ".venv")
+
+    # 检查是否已经在虚拟环境中运行
+    if hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix):
+        print("已在虚拟环境中运行...")
+        return True
+
+    # 检查虚拟环境是否存在
+    if not os.path.exists(venv_dir):
+        print("首次运行检测到，正在创建虚拟环境...")
+
+        # 首先尝试使用内置的venv模块
+        venv_created = False
+        try:
+            print("尝试使用内置venv模块创建虚拟环境...")
+            subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
+            print("使用venv模块创建虚拟环境成功。")
+            venv_created = True
+        except subprocess.CalledProcessError as e:
+            print(f"使用venv模块创建虚拟环境失败：{e}")
+        except Exception as e:
+            print(f"使用venv模块时发生错误：{e}")
+
+        # 如果venv模块失败，尝试安装并使用virtualenv
+        if not venv_created:
+            print("正在尝试安装virtualenv...")
+            try:
+                # 检查virtualenv是否已安装
+                try:
+                    import virtualenv
+                    print("virtualenv已安装。")
+                except ImportError:
+                    print("virtualenv未安装，正在自动安装...")
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "virtualenv"])
+                    print("virtualenv安装完成。")
+
+                # 使用virtualenv创建虚拟环境
+                print("使用virtualenv创建虚拟环境...")
+                subprocess.check_call([sys.executable, "-m", "virtualenv", venv_dir])
+                print("使用virtualenv创建虚拟环境成功。")
+                venv_created = True
+
+            except subprocess.CalledProcessError as e:
+                print(f"使用virtualenv创建虚拟环境失败：{e}")
+            except Exception as e:
+                print(f"安装或使用virtualenv时发生错误：{e}")
+
+        # 如果两种方法都失败了
+        if not venv_created:
+            print("错误：无法创建虚拟环境！")
+            print("请尝试以下解决方案：")
+            print("1. 确保Python版本支持venv模块（Python 3.3+）")
+            print("2. 手动安装virtualenv：pip install virtualenv")
+            print("3. 检查Python安装是否完整")
+            print("4. 以管理员权限运行程序")
+            input("按任意键退出...")
+            sys.exit(1)
+
+    # 确定虚拟环境中Python解释器的路径
+    if os.name == 'nt':  # Windows
+        venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
+        venv_pip = os.path.join(venv_dir, "Scripts", "pip.exe")
+    else:  # Linux/Mac
+        venv_python = os.path.join(venv_dir, "bin", "python")
+        venv_pip = os.path.join(venv_dir, "bin", "pip")
+
+    # 检查虚拟环境是否正确创建
+    if not os.path.exists(venv_python):
+        print("虚拟环境创建不完整，正在重新创建...")
+        try:
+            # 删除不完整的虚拟环境
+            import shutil
+            shutil.rmtree(venv_dir)
+
+            # 重新创建 - 优先使用venv，失败则使用virtualenv
+            venv_recreated = False
+            try:
+                print("重新尝试使用venv模块...")
+                subprocess.check_call([sys.executable, "-m", "venv", venv_dir])
+                print("使用venv模块重新创建成功。")
+                venv_recreated = True
+            except:
+                print("venv模块重新创建失败，尝试使用virtualenv...")
+                try:
+                    subprocess.check_call([sys.executable, "-m", "virtualenv", venv_dir])
+                    print("使用virtualenv重新创建成功。")
+                    venv_recreated = True
+                except Exception as e:
+                    print(f"virtualenv重新创建也失败：{e}")
+
+            if not venv_recreated:
+                print("重新创建虚拟环境失败！")
+                input("按任意键退出...")
+                sys.exit(1)
+
+        except Exception as e:
+            print(f"重新创建虚拟环境失败：{e}")
+            input("按任意键退出...")
+            sys.exit(1)
+
+    # 如果不在虚拟环境中，重新启动程序在虚拟环境中运行
+    print("正在进入虚拟环境...")
+    try:
+        # 将当前脚本的所有参数传递给虚拟环境中的Python
+        args = [venv_python] + sys.argv
+        subprocess.check_call(args)
+        sys.exit(0)  # 退出当前进程
+    except subprocess.CalledProcessError as e:
+        print(f"在虚拟环境中启动程序失败：{e}")
+        print("请检查虚拟环境是否正确创建。")
+        input("按任意键退出...")
+        sys.exit(1)
+    except Exception as e:
+        print(f"启动虚拟环境时发生未知错误：{e}")
+        input("按任意键退出...")
+        sys.exit(1)
+
 def install_requirements():
+    """安装依赖"""
+    # 检查是否在虚拟环境中
+    if not (hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)):
+        print("警告：似乎不在虚拟环境中运行")
+
+    # 升级pip
+    print("正在升级pip...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+        print("pip升级完成。")
+    except Exception as e:
+        print(f"升级pip失败：{e}，继续执行...")
+        # 继续执行，不退出
+
     # 首先安装setuptools，这是许多其他包的依赖
-    print("正在检查依赖...")
+    print("正在检查基础依赖...")
     try:
         import setuptools
+        print("setuptools已安装。")
     except ImportError:
         print("setuptools未安装，正在自动安装...")
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", "setuptools"])
-            print("setuptools安装完成.")
+            print("setuptools安装完成。")
         except Exception as e:
-            print(f"setuptools安装失败：{e}\n请手动运行 pip install setuptools")
-            input("按任意键退出...")  # 让用户看到错误信息
+            print(f"setuptools安装失败：{e}")
+            print("请手动运行：pip install setuptools")
+            input("按任意键退出...")
             sys.exit(1)
+
+    # 安装wheel，提高包安装效率
+    try:
+        import wheel
+        print("wheel已安装。")
+    except ImportError:
+        print("wheel未安装，正在自动安装...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "wheel"])
+            print("wheel安装完成。")
+        except Exception as e:
+            print(f"wheel安装失败：{e}，继续执行...")
 
     req_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
     if not os.path.exists(req_path):
@@ -37,19 +184,37 @@ def install_requirements():
         with open(req_path, "r", encoding="utf-8") as f:
             requirements = [line.strip() for line in f if line.strip() and not line.startswith("#")]
         pkg_resources.require(requirements)
-    except (ImportError, pkg_resources.DistributionNotFound, pkg_resources.VersionConflict):
-        print("检测到缺少依赖，正在自动安装 requirements.txt 中的依赖，请稍候...")
+        print("所有依赖已满足。")
+    except (ImportError, pkg_resources.DistributionNotFound, pkg_resources.VersionConflict) as e:
+        print(f"检测到缺少依赖：{e}")
+        print("正在自动安装 requirements.txt 中的依赖，请稍候...")
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_path])
+            # 使用更详细的安装参数
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install",
+                "-r", req_path,
+                "--upgrade",
+                "--no-cache-dir"
+            ])
             print("依赖安装完成。")
+        except subprocess.CalledProcessError as e:
+            print(f"依赖安装失败（返回码：{e.returncode}）")
+            print("请尝试手动运行：pip install -r requirements.txt")
+            input("按任意键退出...")
+            sys.exit(1)
         except Exception as e:
-            print(f"依赖安装失败：{e}\n请手动运行 pip install -r requirements.txt")
-            input("按任意键退出...")  # 让用户看到错误信息
+            print(f"依赖安装过程中发生未知错误：{e}")
+            print("请尝试手动运行：pip install -r requirements.txt")
+            input("按任意键退出...")
             sys.exit(1)
 
     # 如果执行到这里，依赖检查完成
     print("依赖检查完毕，程序即将启动...")
 
+# 首先设置虚拟环境
+setup_virtual_environment()
+
+# 然后安装依赖
 install_requirements()
 
 # 配置日志
@@ -68,7 +233,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'system'))
 
 # 导入GUI模块和配置常量
 from system.gui import ObjectDetectionGUI
-from system.config import APP_TITLE, APP_VERSION  # 添加导入APP_TITLE
+from system.config import APP_TITLE, APP_VERSION
 
 def main():
     """程序入口点"""
@@ -255,4 +420,42 @@ def main():
     root.mainloop()
 
 if __name__ == "__main__":
-    main()
+    # 检查脚本是否以GUI模式启动。
+    # 我们使用 '--gui-only' 标志来区分首次启动（带命令行）和最终的GUI进程。
+    if '--gui-only' in sys.argv:
+        # 如果是GUI模式，直接运行主程序。
+        # 此时环境和依赖已准备就绪。
+        main()
+    else:
+        # 这是从 bat 文件或命令行首次启动。
+        # 此脚本顶部的 setup_virtual_environment() 和 install_requirements() 函数已经执行完毕。
+
+        # 获取当前虚拟环境中的Python解释器路径。
+        python_executable = sys.executable 
+        gui_executable = python_executable  # 默认值，适用于非Windows系统
+
+        # 在Windows上，我们希望使用 pythonw.exe 来运行GUI，以避免显示命令行窗口。
+        # pythonw.exe 通常与 python.exe 在同一目录下。
+        if os.name == 'nt':
+            venv_scripts_dir = os.path.dirname(python_executable)
+            win_gui_executable = os.path.join(venv_scripts_dir, 'pythonw.exe')
+            
+            # 确认 pythonw.exe 存在
+            if os.path.exists(win_gui_executable):
+                gui_executable = win_gui_executable
+        
+        # 准备参数以重新启动脚本，并附带 '--gui-only' 标志。
+        # 我们传递所有原始参数，并追加我们的特殊标志。
+        args = [gui_executable, __file__] + sys.argv[1:] + ['--gui-only']
+
+        # 使用 subprocess.Popen 启动新的GUI进程。
+        if os.name == 'nt':
+            # 在Windows上，使用 DETACHED_PROCESS 创建标志来使新进程与当前命令行窗口分离。
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen(args, creationflags=DETACHED_PROCESS, close_fds=True)
+        else:
+            # 在Linux或macOS上，直接启动即可，父进程可以退出。
+            subprocess.Popen(args, close_fds=True)
+        
+        # 退出当前脚本，这将关闭命令行窗口。
+        sys.exit(0)
