@@ -32,6 +32,7 @@ from system.metadata_extractor import ImageMetadataExtractor
 from system.data_processor import DataProcessor
 from system.ui_components import ModernFrame, InfoBar, SpeedProgressBar, CollapsiblePanel, RoundedButton
 from system.settings_manager import SettingsManager
+from system.update_checker import check_for_updates
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ class ObjectDetectionGUI:
         self.use_fp16_var = tk.BooleanVar(value=False)  # 是否使用半精度
         self.use_augment_var = tk.BooleanVar(value=True)  # 是否使用增强
         self.use_agnostic_nms_var = tk.BooleanVar(value=True)  # 是否使用类别无关NMS
+        self.update_notification_label = None # 更新提示标签
 
         self.master = master
         master.title(APP_TITLE)
@@ -434,7 +436,7 @@ class ObjectDetectionGUI:
 
         # 创建应用标题/Logo
         logo_frame = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
-        logo_frame.pack(fill="x", pady=(20, 30))
+        logo_frame.pack(fill="x", pady=(20, 10)) # 调整底部间距
 
         # 尝试加载Logo
         try:
@@ -457,6 +459,17 @@ class ObjectDetectionGUI:
             background=sidebar_bg
         )
         app_name.pack()
+        
+        # 更新提示标签
+        self.update_notification_label = ttk.Label(
+            logo_frame,
+            text="",
+            font=("Segoe UI", 9, "bold"),
+            foreground="yellow",
+            background=sidebar_bg
+        )
+        self.update_notification_label.pack(pady=(5, 0))
+
 
         # 创建分隔线
         sep = ttk.Separator(self.sidebar, orient="horizontal")
@@ -508,6 +521,11 @@ class ObjectDetectionGUI:
             font=("Segoe UI", 8)
         )
         version_label.pack(pady=(0, 10))
+
+    def show_update_notification(self, message="发现新版本"):
+        """在侧边栏显示更新通知"""
+        if self.update_notification_label:
+            self.update_notification_label.config(text=message)
 
     def _show_page(self, page_id: str) -> None:
         """显示指定页面并隐藏其他页面"""
