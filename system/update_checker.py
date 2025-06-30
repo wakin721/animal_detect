@@ -21,22 +21,20 @@ SOURCE_ZIP_URL = f"https://github.com/{GITHUB_USER}/{GITHUB_REPO}/archive/refs/h
 
 def get_icon_path():
     """获取图标文件的绝对路径。"""
-    # 此处不使用 utils.resource_path 以避免循环导入
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_dir, "res", "ico.ico")
 
 
 def _show_messagebox(parent, title, message, msg_type):
     """内部辅助函数，用于显示带图标的消息框。"""
-    # 创建一个临时的Toplevel窗口作为父窗口
     transient_parent = tk.Toplevel(parent)
-    transient_parent.withdraw()  # 隐藏它
+    transient_parent.withdraw()
     icon_path = get_icon_path()
     if os.path.exists(icon_path):
         try:
             transient_parent.iconbitmap(icon_path)
         except tk.TclError:
-            pass  # 如果设置图标失败则忽略
+            pass
 
     result = None
     if msg_type == "info":
@@ -46,7 +44,7 @@ def _show_messagebox(parent, title, message, msg_type):
     elif msg_type == "askyesno":
         result = messagebox.askyesno(title, message, parent=transient_parent)
 
-    transient_parent.destroy()  # 销毁临时窗口
+    transient_parent.destroy()
     return result
 
 
@@ -85,7 +83,6 @@ def download_and_install_update(parent):
     progress_window.title("正在更新...")
     progress_window.geometry("300x100")
     
-    # 为更新进度窗口设置图标
     icon_path = get_icon_path()
     if os.path.exists(icon_path):
         try:
@@ -138,9 +135,25 @@ def perform_download(progress_window, label, parent_window):
         progress_window.destroy()
         
         if _show_messagebox(parent_window, "更新成功", "程序已成功更新！\n是否立即重启应用程序以应用更改？", "askyesno"):
-            python_executable = sys.executable
+            # 获取当前虚拟环境的Python解释器路径
+            python_console_executable = sys.executable
+            
+            # 在Windows上, sys.executable可能是'pythonw.exe'。我们需要'python.exe'来显示命令行窗口。
+            if os.name == 'nt' and python_console_executable.endswith('pythonw.exe'):
+                # 'python.exe'通常和'pythonw.exe'在同一个目录下
+                python_exe_path = os.path.join(os.path.dirname(python_console_executable), 'python.exe')
+                if os.path.exists(python_exe_path):
+                    python_console_executable = python_exe_path
+
+            # 获取主脚本'main.py'的路径
             main_script_path = os.path.join(app_root, 'main.py')
-            subprocess.Popen([python_executable, main_script_path])
+
+            # 使用Popen启动一个新进程来运行主脚本。
+            # 这个新进程会显示一个命令行窗口来执行main.py中的依赖检查,
+            # 然后main.py内部的逻辑会再次以无窗口模式启动GUI并退出, 从而关闭命令行。
+            subprocess.Popen([python_console_executable, main_script_path])
+            
+            # 退出当前(旧的)应用程序
             parent_window.destroy()
             sys.exit(0)
 
