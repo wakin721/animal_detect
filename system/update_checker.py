@@ -97,6 +97,10 @@ def check_for_updates(parent, silent=False):
         remote_parts = list(map(int, remote_version.split('-')[0].split('.')))
 
         if remote_parts > current_parts:
+            # 在主GUI的侧边栏显示更新通知
+            if hasattr(parent, 'show_update_notification'):
+                parent.show_update_notification()
+            
             if _show_messagebox(parent, "发现新版本", f"新版本 ({remote_version}) 可用，您想现在更新吗？", "askyesno"):
                 download_and_install_update(parent)
         else:
