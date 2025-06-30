@@ -26,15 +26,46 @@ def get_icon_path():
 
 
 def _show_messagebox(parent, title, message, msg_type):
-    """内部辅助函数，用于显示带图标的消息框。"""
+    """内部辅助函数，用于显示居中的、带图标的消息框。"""
+    # 创建一个临时的Toplevel窗口
     transient_parent = tk.Toplevel(parent)
-    transient_parent.withdraw()
+    transient_parent.withdraw()  # 先隐藏它，避免闪烁
+    transient_parent.title(title) # 给临时窗口也设置标题
+
+    # 设置图标
     icon_path = get_icon_path()
     if os.path.exists(icon_path):
         try:
             transient_parent.iconbitmap(icon_path)
         except tk.TclError:
             pass
+            
+    # *** 居中逻辑开始 ***
+    # 强制更新窗口尺寸信息
+    parent.update_idletasks()
+    transient_parent.update_idletasks()
+
+    # 获取主窗口和临时窗口的尺寸和位置
+    parent_x = parent.winfo_x()
+    parent_y = parent.winfo_y()
+    parent_width = parent.winfo_width()
+    parent_height = parent.winfo_height()
+    
+    # 估算messagebox的大致尺寸（可以根据需要调整）
+    # askyesno通常比showinfo略宽
+    win_width = 300
+    win_height = 130
+
+    # 计算居中位置
+    x = parent_x + (parent_width // 2) - (win_width // 2)
+    y = parent_y + (parent_height // 2) - (win_height // 2)
+
+    # 设置临时窗口的位置
+    transient_parent.geometry(f'+{x}+{y}')
+    # *** 居中逻辑结束 ***
+
+    transient_parent.deiconify() # 显示临时窗口，为messagebox做准备
+    transient_parent.withdraw() # 再次隐藏，让messagebox成为焦点
 
     result = None
     if msg_type == "info":
@@ -44,7 +75,7 @@ def _show_messagebox(parent, title, message, msg_type):
     elif msg_type == "askyesno":
         result = messagebox.askyesno(title, message, parent=transient_parent)
 
-    transient_parent.destroy()
+    transient_parent.destroy() # 销毁临时窗口
     return result
 
 
@@ -81,7 +112,7 @@ def download_and_install_update(parent):
     """创建带进度条的更新窗口。"""
     progress_window = tk.Toplevel(parent)
     progress_window.title("正在更新...")
-    progress_window.geometry("350x120") # 调整窗口大小以容纳进度条
+    progress_window.geometry("350x120")
     
     icon_path = get_icon_path()
     if os.path.exists(icon_path):
@@ -89,6 +120,12 @@ def download_and_install_update(parent):
             progress_window.iconbitmap(icon_path)
         except tk.TclError:
             pass
+    
+    # 将更新进度窗口也居中
+    parent.update_idletasks()
+    x = parent.winfo_x() + (parent.winfo_width() // 2) - (350 // 2)
+    y = parent.winfo_y() + (parent.winfo_height() // 2) - (120 // 2)
+    progress_window.geometry(f'+{x}+{y}')
             
     progress_window.transient(parent)
     progress_window.grab_set()
@@ -96,11 +133,9 @@ def download_and_install_update(parent):
     label = ttk.Label(progress_window, text="正在连接到服务器...")
     label.pack(padx=20, pady=10)
 
-    # 创建进度条
     progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=300, mode='determinate')
     progress_bar.pack(padx=20, pady=5)
     
-    # 使用 after 以确保窗口先显示
     parent.after(100, lambda: perform_download(progress_window, label, progress_bar, parent))
 
 
@@ -113,30 +148,26 @@ def perform_download(progress_window, label, progress_bar, parent_window):
         response = requests.get(SOURCE_ZIP_URL, stream=True)
         response.raise_for_status()
 
-        # 获取文件总大小，用于计算进度
         total_size = int(response.headers.get('content-length', 0))
         progress_bar['maximum'] = total_size
         
         downloaded_size = 0
         file_buffer = io.BytesIO()
 
-        # 分块下载
         for chunk in response.iter_content(chunk_size=8192):
             if chunk:
                 file_buffer.write(chunk)
                 downloaded_size += len(chunk)
-                # 更新进度条
                 progress_bar['value'] = downloaded_size
-                progress_window.update_idletasks() # 刷新UI
+                progress_window.update_idletasks()
 
         label.config(text="下载完成，正在解压并安装...")
-        progress_bar['mode'] = 'indeterminate' # 解压时使用不确定模式
+        progress_bar['mode'] = 'indeterminate'
         progress_bar.start(10)
         progress_window.update_idletasks()
         
         app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         
-        # 从内存中的BytesIO对象解压
         file_buffer.seek(0)
         with zipfile.ZipFile(file_buffer) as z:
             root_folder_in_zip = z.namelist()[0]
