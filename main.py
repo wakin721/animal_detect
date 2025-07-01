@@ -310,8 +310,8 @@ def main():
 if __name__ == "__main__":
     # --- existing GUI launch logic ---
     # ... (no changes needed in this part)
-    main()
-    '''if '--gui-only' in sys.argv:
+    #main()
+    if '--gui-only' in sys.argv:
         main()
     else:
         python_executable = sys.executable
@@ -326,4 +326,4 @@ if __name__ == "__main__":
             subprocess.Popen(args, creationflags=0x00000008, close_fds=True)
         else:
             subprocess.Popen(args, close_fds=True)
-        sys.exit(0)'''
+        sys.exit(0)
