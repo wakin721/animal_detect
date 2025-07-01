@@ -20,6 +20,113 @@ CONFIG_FILE_URL = f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO
 SOURCE_ZIP_URL = f"https://github.com/{GITHUB_USER}/{GITHUB_REPO}/archive/refs/heads/main.zip"
 
 
+def parse_version(version_str):
+    """
+    解析版本字符串为可比较的组件。
+    
+    Args:
+        version_str: 版本字符串，如 "2.2.3-beta" 或 "2.2.3-alpha.1"
+        
+    Returns:
+        tuple: (major, minor, patch, prerelease_type, prerelease_num)
+        其中 prerelease_type 为 None (稳定版), 'alpha', 'beta', 'rc' 之一
+        prerelease_num 为预发布版本的数字后缀，默认为 0
+    """
+    # 分割主版本号和预发布标识
+    if '-' in version_str:
+        main_version, prerelease = version_str.split('-', 1)
+    else:
+        main_version, prerelease = version_str, None
+    
+    # 解析主版本号
+    try:
+        major, minor, patch = map(int, main_version.split('.'))
+    except ValueError:
+        raise ValueError(f"无效的版本格式: {version_str}")
+    
+    # 解析预发布标识
+    prerelease_type = None
+    prerelease_num = 0
+    
+    if prerelease:
+        # 处理预发布标识，如 "alpha", "beta.1", "rc.2" 等
+        if '.' in prerelease:
+            prerelease_type, num_str = prerelease.split('.', 1)
+            try:
+                prerelease_num = int(num_str)
+            except ValueError:
+                prerelease_num = 0
+        else:
+            prerelease_type = prerelease
+    
+    return (major, minor, patch, prerelease_type, prerelease_num)
+
+
+def compare_versions(current_version, remote_version):
+    """
+    比较两个版本字符串，遵循语义化版本规则。
+    
+    Args:
+        current_version: 当前版本字符串
+        remote_version: 远程版本字符串
+        
+    Returns:
+        bool: 如果远程版本更新则返回 True，否则返回 False
+    """
+    try:
+        current = parse_version(current_version)
+        remote = parse_version(remote_version)
+        
+        # 比较主版本号 (major, minor, patch)
+        current_main = current[:3]
+        remote_main = remote[:3]
+        
+        if remote_main > current_main:
+            return True
+        elif remote_main < current_main:
+            return False
+        
+        # 主版本号相同，比较预发布标识
+        current_prerelease = current[3]
+        remote_prerelease = remote[3]
+        
+        # 稳定版 > 任何预发布版
+        if current_prerelease is None and remote_prerelease is not None:
+            return False  # 当前是稳定版，远程是预发布版，不更新
+        if current_prerelease is not None and remote_prerelease is None:
+            return True   # 当前是预发布版，远程是稳定版，需要更新
+        
+        # 都是稳定版或都是预发布版
+        if current_prerelease is None and remote_prerelease is None:
+            return False  # 主版本号相同的稳定版，不更新
+        
+        # 都是预发布版，比较预发布类型
+        prerelease_order = {'alpha': 1, 'beta': 2, 'rc': 3}
+        
+        current_order = prerelease_order.get(current_prerelease, 0)
+        remote_order = prerelease_order.get(remote_prerelease, 0)
+        
+        if remote_order > current_order:
+            return True
+        elif remote_order < current_order:
+            return False
+        
+        # 预发布类型相同，比较数字后缀
+        current_num = current[4]
+        remote_num = remote[4]
+        
+        return remote_num > current_num
+        
+    except ValueError as e:
+        # 如果版本解析失败，回退到原来的简单比较
+        try:
+            current_parts = list(map(int, current_version.split('-')[0].split('.')))
+            remote_parts = list(map(int, remote_version.split('-')[0].split('.')))
+            return remote_parts > current_parts
+        except:
+            return False
+
+
 def get_icon_path():
     """获取图标文件的绝对路径。"""
     try:
@@ -98,10 +205,8 @@ def check_for_updates(parent, silent=False):
             return
 
         remote_version = match.group(1)
-        current_parts = list(map(int, APP_VERSION.split('-')[0].split('.')))
-        remote_parts = list(map(int, remote_version.split('-')[0].split('.')))
-
-        if remote_parts > current_parts:
+        
+        if compare_versions(APP_VERSION, remote_version):
             # 在主GUI的侧边栏显示更新通知 (通过after调度)
             if hasattr(parent, 'show_update_notification'):
                 parent.after(0, parent.show_update_notification)
