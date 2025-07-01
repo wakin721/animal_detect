@@ -479,18 +479,29 @@ class AdvancedPage(ttk.Frame):
     # V V V V V V V V V V V V V V V V V V V V
     def _ask_for_restart(self, title="操作完成"):
         """弹窗询问用户是否重启应用"""
-        if messagebox.askyesno(title, "操作已完成，建议重启软件以应用所有更改。\n是否立即重启？"):
-            try:
-                python_executable = sys.executable
-                if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
-                    console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
-                    if os.path.exists(console_executable):
-                        python_executable = console_executable
-                main_script = sys.argv[0]
-                subprocess.Popen([python_executable, main_script])
-                self.controller.master.destroy()
-            except Exception as e:
-                messagebox.showerror("重启失败", f"无法自动重启应用: {e}")
+        try:
+            if messagebox.askyesno(title, "操作已完成，建议重启软件以应用所有更改。\n是否立即重启？"):
+                logger.info("用户选择重启应用程序")
+                try:
+                    python_executable = sys.executable
+                    if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
+                        console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
+                        if os.path.exists(console_executable):
+                            python_executable = console_executable
+                    
+                    main_script = sys.argv[0]
+                    logger.info(f"重启命令: {python_executable} {main_script}")
+                    
+                    subprocess.Popen([python_executable, main_script])
+                    self.controller.master.destroy()
+                except Exception as e:
+                    error_msg = f"无法自动重启应用: {e}"
+                    logger.error(error_msg, exc_info=True)
+                    messagebox.showerror("重启失败", f"{error_msg}\n请手动重启应用程序。")
+            else:
+                logger.info("用户选择不重启应用程序")
+        except Exception as e:
+            logger.error(f"重启询问过程中发生错误: {e}", exc_info=True)
 
     def _run_install_in_terminal(self, command_args, status_var, success_title):
         """在新终端窗口中运行安装命令，完成后自动关闭并提示重启"""
@@ -498,112 +509,230 @@ class AdvancedPage(ttk.Frame):
         def installation_thread():
             try:
                 python_executable = sys.executable
+                logger.info(f"开始安装过程，Python可执行文件: {python_executable}")
+                
                 # 强制使用 python.exe 以确保终端窗口弹出
                 if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
                     console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
                     if os.path.exists(console_executable):
                         python_executable = console_executable
+                        logger.info(f"切换到控制台版本: {python_executable}")
 
-                # 构造安装命令字符串
-                # 关键修正：在这里加上 -m
-                install_cmd_list = [f'"{python_executable}"', '-m'] + command_args
-                install_cmd = " ".join(install_cmd_list)
+                # 构造基础安装命令 (作为列表，更安全)
+                base_cmd = [python_executable, '-m'] + command_args
+                logger.info(f"基础安装命令: {base_cmd}")
 
-                # 构造一个完整的 shell 命令
-                # 在安装成功后，会打印成功信息并执行一个5秒的倒计时
-                if platform.system() == "Windows":
-                    # 使用 '&&' 来确保只有在安装成功时才执行后续命令
-                    # 使用 'echo.' 打印空行以获得更好的格式
-                    # 使用 'timeout' 来实现倒计时，'/nobreak' 防止用户跳过
-                    countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
-                else:  # for Linux/macOS
-                    countdown_cmd = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
-
+                # 平台特定的命令构造和执行
                 self.master.after(0, lambda: status_var.set("安装已启动..."))
 
-                # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
-                # 这会弹出一个新的命令行窗口
-                process = subprocess.Popen(final_command, shell=True)
-                process.communicate()  # 等待整个过程（包括倒计时）结束
+                if platform.system() == "Windows":
+                    # Windows: 使用 cmd.exe 特定语法和适当的转义
+                    install_cmd_str = subprocess.list2cmdline(base_cmd)
+                    success_msg = "echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak"
+                    final_command = f'cmd /c "({install_cmd_str}) && ({success_msg})"'
+                    logger.info(f"Windows命令: {final_command}")
+                    
+                    # 在Windows上创建新的控制台窗口
+                    process = subprocess.Popen(
+                        final_command,
+                        shell=True,
+                        creationflags=subprocess.CREATE_NEW_CONSOLE if hasattr(subprocess, 'CREATE_NEW_CONSOLE') else 0
+                    )
+                else:
+                    # Linux/macOS: 使用 sh/bash 语法
+                    install_cmd_str = ' '.join(f'"{arg}"' if ' ' in str(arg) or any(c in str(arg) for c in ['&', '|', ';', '(', ')', '<', '>']) else str(arg) for arg in base_cmd)
+                    success_msg = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
+                    final_command = f'({install_cmd_str}) && ({success_msg})'
+                    logger.info(f"Unix命令: {final_command}")
+                    
+                    # 尝试在新终端窗口中打开 (如果可能)
+                    terminal_cmd = None
+                    for terminal in ['gnome-terminal', 'xterm', 'konsole', 'x-terminal-emulator']:
+                        if subprocess.run(['which', terminal], capture_output=True).returncode == 0:
+                            if terminal == 'gnome-terminal':
+                                terminal_cmd = ['gnome-terminal', '--', 'bash', '-c', final_command]
+                            elif terminal == 'xterm':
+                                terminal_cmd = ['xterm', '-e', 'bash', '-c', final_command]
+                            elif terminal == 'konsole':
+                                terminal_cmd = ['konsole', '-e', 'bash', '-c', final_command]
+                            else:
+                                terminal_cmd = [terminal, '-e', 'bash', '-c', final_command]
+                            break
+                    
+                    if terminal_cmd:
+                        logger.info(f"使用终端: {terminal_cmd[0]}")
+                        process = subprocess.Popen(terminal_cmd)
+                    else:
+                        # 回退到无终端执行
+                        logger.warning("未找到合适的终端，回退到后台执行")
+                        process = subprocess.Popen(final_command, shell=True)
 
+                # 等待安装完成
+                logger.info("等待安装过程完成...")
+                process.communicate()
+
+                # 处理结果
                 if process.returncode == 0:
+                    logger.info("安装成功完成")
                     self.master.after(0, lambda: status_var.set("安装成功！"))
                     self.master.after(100, lambda: self._ask_for_restart(success_title))
                 else:
-                    # 如果安装失败, '&&' 会阻止倒计时命令的执行
-                    # 命令行窗口会停留在错误信息界面，等待用户手动关闭
-                    error_message = f"安装失败 (返回码: {process.returncode})。\n请查看命令行窗口获取详细错误信息。"
-                    logger.error(error_message)
+                    # 安装失败
+                    error_message = f"安装失败 (返回码: {process.returncode})。\n请查看终端窗口获取详细错误信息。"
+                    logger.error(f"安装失败，返回码: {process.returncode}")
                     self.master.after(0, lambda: status_var.set("安装失败"))
-                    messagebox.showerror("安装错误", error_message)
+                    self.master.after(0, lambda: messagebox.showerror("安装错误", error_message))
 
-            except Exception as e:
-                error_msg = f"执行安装命令时出错: {e}"
+            except subprocess.CalledProcessError as e:
+                error_msg = f"安装命令执行失败: {e}"
                 logger.error(error_msg)
-                self.master.after(0, lambda: status_var.set(f"启动失败: {e}"))
+                self.master.after(0, lambda: status_var.set("执行失败"))
+                self.master.after(0, lambda: messagebox.showerror("执行错误", error_msg))
+            except FileNotFoundError as e:
+                error_msg = f"找不到可执行文件: {e}"
+                logger.error(error_msg)
+                self.master.after(0, lambda: status_var.set("文件未找到"))
+                self.master.after(0, lambda: messagebox.showerror("文件错误", error_msg))
+            except Exception as e:
+                error_msg = f"执行安装命令时出现未知错误: {e}"
+                logger.error(error_msg, exc_info=True)
+                self.master.after(0, lambda: status_var.set("未知错误"))
+                self.master.after(0, lambda: messagebox.showerror("未知错误", error_msg))
             finally:
-                self.master.after(0, lambda: self.install_button.configure(state="normal"))
-                if hasattr(self, 'install_package_btn'):
-                    self.master.after(0, lambda: self.install_package_btn.configure(state="normal"))
+                # 确保按钮状态总是被恢复
+                logger.info("恢复按钮状态")
+                self.master.after(0, self._restore_button_states)
 
         threading.Thread(target=installation_thread, daemon=True).start()
 
+    def _restore_button_states(self):
+        """恢复所有安装按钮的状态"""
+        try:
+            if hasattr(self, 'install_button') and self.install_button.winfo_exists():
+                self.install_button.configure(state="normal")
+                logger.debug("恢复PyTorch安装按钮状态")
+        except Exception as e:
+            logger.warning(f"恢复install_button状态失败: {e}")
+        
+        try:
+            if hasattr(self, 'install_package_btn') and self.install_package_btn.winfo_exists():
+                self.install_package_btn.configure(state="normal")
+                logger.debug("恢复包安装按钮状态")
+        except Exception as e:
+            logger.warning(f"恢复install_package_btn状态失败: {e}")
+
     def _install_pytorch(self):
         """准备并启动PyTorch安装"""
-        version_str = self.pytorch_version_var.get()
-        if not version_str:
-            messagebox.showerror("错误", "请选择PyTorch版本")
-            return
-        if not messagebox.askyesno("确认安装",
-                                   f"将开始安装 PyTorch {version_str}。\n过程可能需要几分钟，请保持网络连接。\n是否继续？"):
-            return
+        try:
+            version_str = self.pytorch_version_var.get()
+            if not version_str:
+                messagebox.showerror("错误", "请选择PyTorch版本")
+                return
+                
+            logger.info(f"开始PyTorch安装流程，版本: {version_str}")
+            
+            if not messagebox.askyesno("确认安装",
+                                       f"将开始安装 PyTorch {version_str}。\n过程可能需要几分钟，请保持网络连接。\n是否继续？"):
+                logger.info("用户取消了PyTorch安装")
+                return
 
-        self.install_button.configure(state="disabled")
-        self.pytorch_status_var.set("正在准备安装...")
-        self.master.update_idletasks()
+            # 禁用按钮并显示状态
+            self.install_button.configure(state="disabled")
+            self.pytorch_status_var.set("正在准备安装...")
+            self.master.update_idletasks()
 
-        pytorch_match = re.search(r"(\d+\.\d+\.\d+)", version_str)
-        cuda_match = re.search(r"CUDA (\d+\.\d+)", version_str)
-        pytorch_version = pytorch_match.group(1) if pytorch_match else None
-        cuda_version = cuda_match.group(1) if cuda_match else None
+            # 解析版本信息
+            pytorch_match = re.search(r"(\d+\.\d+\.\d+)", version_str)
+            cuda_match = re.search(r"CUDA (\d+\.\d+)", version_str)
+            pytorch_version = pytorch_match.group(1) if pytorch_match else None
+            cuda_version = cuda_match.group(1) if cuda_match else None
 
-        if not pytorch_version:
-            messagebox.showerror("错误", "无法解析PyTorch版本")
-            self.install_button.configure(state="normal")
-            return
+            if not pytorch_version:
+                error_msg = "无法解析PyTorch版本信息"
+                logger.error(f"{error_msg}，版本字符串: {version_str}")
+                messagebox.showerror("错误", error_msg)
+                self.install_button.configure(state="normal")
+                self.pytorch_status_var.set("版本解析失败")
+                return
 
-        command_args = ["pip", "install", "--upgrade"]
-        if self.force_reinstall_var.get():
-            command_args.append("--force-reinstall")
-        command_args.extend([f"torch=={pytorch_version}", "torchvision", "torchaudio"])
-        if cuda_version:
-            cuda_str_map = {"11.8": "cu118", "12.1": "cu121"}
-            cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
-            command_args.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_str}"])
-        else:
-            command_args.extend(["--index-url", "https://download.pytorch.org/whl/cpu"])
+            # 构造安装命令
+            command_args = ["pip", "install", "--upgrade"]
+            if self.force_reinstall_var.get():
+                command_args.append("--force-reinstall")
+                logger.info("启用强制重装选项")
+                
+            command_args.extend([f"torch=={pytorch_version}", "torchvision", "torchaudio"])
+            
+            if cuda_version:
+                cuda_str_map = {"11.8": "cu118", "12.1": "cu121", "12.6": "cu126", "12.8": "cu128"}
+                cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
+                command_args.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_str}"])
+                logger.info(f"使用CUDA版本: {cuda_version} ({cuda_str})")
+            else:
+                command_args.extend(["--index-url", "https://download.pytorch.org/whl/cpu"])
+                logger.info("使用CPU版本")
 
-        self._run_install_in_terminal(command_args, self.pytorch_status_var, "PyTorch 安装完成")
+            logger.info(f"PyTorch安装命令: {command_args}")
+            self._run_install_in_terminal(command_args, self.pytorch_status_var, "PyTorch 安装完成")
+            
+        except Exception as e:
+            error_msg = f"准备PyTorch安装时发生错误: {e}"
+            logger.error(error_msg, exc_info=True)
+            messagebox.showerror("安装准备错误", error_msg)
+            self.pytorch_status_var.set("准备失败")
+            # 确保按钮状态恢复
+            try:
+                self.install_button.configure(state="normal")
+            except Exception:
+                pass
 
     def _install_python_package(self):
         """准备并启动单个Python包的安装"""
-        package = self.package_var.get().strip()
-        if not package:
-            messagebox.showerror("错误", "请输入包名称")
-            return
-        version_constraint = self.version_constraint_var.get().strip()
-        package_spec = f"{package}{version_constraint}"
-        if not messagebox.askyesno("确认安装", f"将开始安装 {package_spec}。\n是否继续？"):
-            return
+        try:
+            package = self.package_var.get().strip()
+            if not package:
+                messagebox.showerror("错误", "请输入包名称")
+                return
+                
+            version_constraint = self.version_constraint_var.get().strip()
+            package_spec = f"{package}{version_constraint}"
+            
+            logger.info(f"开始Python包安装流程，包规格: {package_spec}")
+            
+            if not messagebox.askyesno("确认安装", f"将开始安装 {package_spec}。\n是否继续？"):
+                logger.info("用户取消了包安装")
+                return
 
-        self.install_package_btn.configure(state="disabled")
-        self.package_status_var.set("正在准备安装...")
-        self.master.update_idletasks()
+            # 禁用按钮并显示状态
+            self.install_package_btn.configure(state="disabled")
+            self.package_status_var.set("正在准备安装...")
+            self.master.update_idletasks()
 
-        command_args = ["pip", "install", "--upgrade", package_spec]
-        self._run_install_in_terminal(command_args, self.package_status_var, f"安装 {package_spec} 完成")
+            # 验证包名称格式 (基础验证)
+            if not package.replace('-', '').replace('_', '').replace('.', '').isalnum():
+                error_msg = f"包名称格式无效: {package}"
+                logger.warning(error_msg)
+                messagebox.showerror("错误", error_msg)
+                self.install_package_btn.configure(state="normal")
+                self.package_status_var.set("格式错误")
+                return
+
+            # 构造安装命令
+            command_args = ["pip", "install", "--upgrade", package_spec]
+            logger.info(f"包安装命令: {command_args}")
+            
+            self._run_install_in_terminal(command_args, self.package_status_var, f"安装 {package_spec} 完成")
+            
+        except Exception as e:
+            error_msg = f"准备包安装时发生错误: {e}"
+            logger.error(error_msg, exc_info=True)
+            messagebox.showerror("安装准备错误", error_msg)
+            self.package_status_var.set("准备失败")
+            # 确保按钮状态恢复
+            try:
+                self.install_package_btn.configure(state="normal")
+            except Exception:
+                pass
 
     # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
 
