@@ -30,6 +30,48 @@ def get_icon_path():
     return os.path.join(base_dir, "res", "ico.ico")
 
 
+def parse_version(version_string):
+    """
+    解析版本字符串，返回用于比较的元组。
+    支持格式：major.minor.patch-prerelease
+    例如：2.2.3-alpha, 2.2.3-beta, 2.2.4
+    """
+    # 预发布版本的优先级
+    prerelease_priority = {
+        'alpha': 1,
+        'beta': 2,
+        'rc': 3,
+        'release': 4  # 正式版本
+    }
+    
+    # 分离主版本号和预发布标识
+    if '-' in version_string:
+        main_version, prerelease = version_string.split('-', 1)
+    else:
+        main_version = version_string
+        prerelease = 'release'  # 没有预发布标识的视为正式版本
+    
+    # 解析主版本号
+    version_parts = list(map(int, main_version.split('.')))
+    
+    # 获取预发布优先级，未知的预发布类型默认为0
+    prerelease_value = prerelease_priority.get(prerelease.lower(), 0)
+    
+    # 返回比较元组：(主版本号部分..., 预发布优先级)
+    return tuple(version_parts + [prerelease_value])
+
+
+def compare_versions(current_version, remote_version):
+    """
+    比较两个版本，如果远程版本更新则返回True。
+    支持主版本号升级和预发布版本升级（如alpha->beta）。
+    """
+    current_tuple = parse_version(current_version)
+    remote_tuple = parse_version(remote_version)
+    
+    return remote_tuple > current_tuple
+
+
 def _show_messagebox(parent, title, message, msg_type):
     """
     内部辅助函数，用于显示居中的、带图标的消息框。
@@ -77,7 +119,7 @@ def _show_messagebox(parent, title, message, msg_type):
         # 如果需要返回结果，需要更复杂的处理，例如使用回调或事件
         # 这里我们假设askyesno的结果需要在UI线程中直接处理
         if msg_type == "askyesno" and result:
-            # 如果用户点击“是”，启动下载
+            # 如果用户点击"是"，启动下载
             start_download_thread(parent)
 
     # 确保在主线程中执行
@@ -98,16 +140,29 @@ def check_for_updates(parent, silent=False):
             return
 
         remote_version = match.group(1)
-        current_parts = list(map(int, APP_VERSION.split('-')[0].split('.')))
-        remote_parts = list(map(int, remote_version.split('-')[0].split('.')))
-
-        if remote_parts > current_parts:
+        
+        # 使用新的版本比较函数
+        if compare_versions(APP_VERSION, remote_version):
             # 在主GUI的侧边栏显示更新通知 (通过after调度)
             if hasattr(parent, 'show_update_notification'):
                 parent.after(0, parent.show_update_notification)
 
             # 显示更新对话框 (通过after调度)
-            _show_messagebox(parent, "发现新版本", f"新版本 ({remote_version}) 可用，您想现在更新吗？", "askyesno")
+            update_message = f"新版本 ({remote_version}) 可用，您想现在更新吗？"
+            
+            # 如果是预发布版本升级，添加特别说明
+            current_parsed = parse_version(APP_VERSION)
+            remote_parsed = parse_version(remote_version)
+            
+            # 检查是否是同一主版本号的预发布升级
+            if (current_parsed[:-1] == remote_parsed[:-1] and 
+                current_parsed[-1] < remote_parsed[-1]):
+                if remote_version.endswith('-beta') and APP_VERSION.endswith('-alpha'):
+                    update_message = f"发现 Beta 版本 ({remote_version})，相比 Alpha 版本更加稳定。您想现在更新吗？"
+                elif remote_version.endswith('-rc') and (APP_VERSION.endswith('-alpha') or APP_VERSION.endswith('-beta')):
+                    update_message = f"发现候选发布版本 ({remote_version})，即将正式发布。您想现在更新吗？"
+            
+            _show_messagebox(parent, "发现新版本", update_message, "askyesno")
         else:
             if not silent:
                 _show_messagebox(parent, "无更新", "您目前使用的是最新版本。", "info")
