@@ -228,8 +228,14 @@ class AdvancedPage(ttk.Frame):
         versions = [
             "2.7.1 (CUDA 12.8)",
             "2.7.1 (CUDA 12.6)",
+            "2.7.1 (CUDA 12.4)",
+            "2.7.1 (CUDA 12.1)",
             "2.7.1 (CUDA 11.8)",
+            "2.6.0 (CUDA 12.4)",
+            "2.6.0 (CUDA 12.1)",
+            "2.6.0 (CUDA 11.8)",
             "2.7.1 (CPU Only)",
+            "2.6.0 (CPU Only)",
         ]
         style.configure("Dropdown.TCombobox", padding=(10, 5))
         version_combo = ttk.Combobox(
@@ -505,8 +511,15 @@ class AdvancedPage(ttk.Frame):
                         python_executable = console_executable
 
                 # 构造安装命令字符串
-                # 关键修正：在这里加上 -m
+                # 关键修正：在这里加上 -m，并确保参数正确转义
                 install_cmd_list = [f'"{python_executable}"', '-m'] + command_args
+                
+                # Validate command arguments for special characters that might cause issues
+                for arg in command_args:
+                    if '"' in arg and not (arg.startswith('"') and arg.endswith('"')):
+                        # Escape any quotes that aren't already properly quoted
+                        arg = arg.replace('"', '\\"')
+                
                 install_cmd = " ".join(install_cmd_list)
 
                 # 构造一个完整的 shell 命令
@@ -525,8 +538,15 @@ class AdvancedPage(ttk.Frame):
 
                 # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
                 # 这会弹出一个新的命令行窗口
-                process = subprocess.Popen(final_command, shell=True)
-                process.communicate()  # 等待整个过程（包括倒计时）结束
+                try:
+                    process = subprocess.Popen(final_command, shell=True)
+                    process.communicate()  # 等待整个过程（包括倒计时）结束
+                except OSError as e:
+                    error_msg = f"无法启动安装进程: {e}"
+                    logger.error(error_msg)
+                    self.master.after(0, lambda: status_var.set("启动失败"))
+                    self.master.after(0, lambda: messagebox.showerror("启动错误", error_msg))
+                    return
 
                 if process.returncode == 0:
                     self.master.after(0, lambda: status_var.set("安装成功！"))
@@ -534,10 +554,10 @@ class AdvancedPage(ttk.Frame):
                 else:
                     # 如果安装失败, '&&' 会阻止倒计时命令的执行
                     # 命令行窗口会停留在错误信息界面，等待用户手动关闭
-                    error_message = f"安装失败 (返回码: {process.returncode})。\n请查看命令行窗口获取详细错误信息。"
+                    error_message = f"安装失败 (返回码: {process.returncode})。\n请查看命令行窗口获取详细错误信息。\n\n执行的命令: {install_cmd}"
                     logger.error(error_message)
                     self.master.after(0, lambda: status_var.set("安装失败"))
-                    messagebox.showerror("安装错误", error_message)
+                    self.master.after(0, lambda: messagebox.showerror("安装错误", error_message))
 
             except Exception as e:
                 error_msg = f"执行安装命令时出错: {e}"
@@ -564,24 +584,65 @@ class AdvancedPage(ttk.Frame):
         self.pytorch_status_var.set("正在准备安装...")
         self.master.update_idletasks()
 
+        # Parse version string with better error handling
         pytorch_match = re.search(r"(\d+\.\d+\.\d+)", version_str)
         cuda_match = re.search(r"CUDA (\d+\.\d+)", version_str)
         pytorch_version = pytorch_match.group(1) if pytorch_match else None
         cuda_version = cuda_match.group(1) if cuda_match else None
 
         if not pytorch_version:
-            messagebox.showerror("错误", "无法解析PyTorch版本")
+            messagebox.showerror("错误", f"无法解析PyTorch版本，请重新选择版本\n选择的版本: {version_str}")
             self.install_button.configure(state="normal")
             return
 
+        # Validate that the parsed version is reasonable
+        try:
+            version_parts = [int(x) for x in pytorch_version.split('.')]
+            if len(version_parts) != 3 or version_parts[0] < 1:
+                raise ValueError("Invalid version format")
+        except (ValueError, IndexError):
+            messagebox.showerror("错误", f"PyTorch版本格式无效: {pytorch_version}")
+            self.install_button.configure(state="normal")
+            return
+
+        # Build installation command with validation
         command_args = ["pip", "install", "--upgrade"]
         if self.force_reinstall_var.get():
             command_args.append("--force-reinstall")
-        command_args.extend([f"torch=={pytorch_version}", "torchvision", "torchaudio"])
+        
+        # Validate package specifications before adding them
+        torch_spec = f"torch=={pytorch_version}"
+        if not pytorch_version or '=' in pytorch_version or ' ' in pytorch_version:
+            messagebox.showerror("错误", f"PyTorch版本包含无效字符: {pytorch_version}")
+            self.install_button.configure(state="normal")
+            return
+            
+        command_args.extend([torch_spec, "torchvision", "torchaudio"])
+        
         if cuda_version:
-            cuda_str_map = {"11.8": "cu118", "12.1": "cu121"}
-            cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
-            command_args.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_str}"])
+            # Complete CUDA version mapping for all supported versions
+            cuda_str_map = {
+                "11.8": "cu118", 
+                "12.1": "cu121",
+                "12.4": "cu124",
+                "12.6": "cu126",
+                "12.8": "cu128"
+            }
+            cuda_str = cuda_str_map.get(cuda_version)
+            if not cuda_str:
+                # If version not in map, show error instead of guessing
+                messagebox.showerror("错误", f"不支持的CUDA版本: {cuda_version}\n支持的版本: {', '.join(cuda_str_map.keys())}")
+                self.install_button.configure(state="normal")
+                return
+            
+            # Validate URL construction
+            index_url = f"https://download.pytorch.org/whl/{cuda_str}"
+            if not index_url.startswith("https://download.pytorch.org/whl/cu"):
+                messagebox.showerror("错误", f"构造的URL无效: {index_url}")
+                self.install_button.configure(state="normal")
+                return
+                
+            command_args.extend(["--index-url", index_url])
         else:
             command_args.extend(["--index-url", "https://download.pytorch.org/whl/cpu"])
 
@@ -593,7 +654,21 @@ class AdvancedPage(ttk.Frame):
         if not package:
             messagebox.showerror("错误", "请输入包名称")
             return
+            
+        # Validate package name for basic safety
+        if not package.replace('-', '').replace('_', '').replace('.', '').replace('[', '').replace(']', '').isalnum():
+            messagebox.showerror("错误", f"包名称包含无效字符: {package}")
+            return
+            
         version_constraint = self.version_constraint_var.get().strip()
+        
+        # Validate version constraint if provided
+        if version_constraint:
+            valid_operators = ['==', '>=', '<=', '>', '<', '!=', '~=']
+            if not any(version_constraint.startswith(op) for op in valid_operators):
+                messagebox.showerror("错误", f"版本约束格式无效: {version_constraint}\n支持的格式: {', '.join(valid_operators)}")
+                return
+        
         package_spec = f"{package}{version_constraint}"
         if not messagebox.askyesno("确认安装", f"将开始安装 {package_spec}。\n是否继续？"):
             return
