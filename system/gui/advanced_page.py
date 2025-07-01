@@ -608,14 +608,14 @@ class AdvancedPage(ttk.Frame):
     def _restore_button_states(self):
         """恢复所有安装按钮的状态"""
         try:
-            if hasattr(self, 'install_button') and self.install_button.winfo_exists():
+            if hasattr(self, 'install_button') and self.install_button:
                 self.install_button.configure(state="normal")
                 logger.debug("恢复PyTorch安装按钮状态")
         except Exception as e:
             logger.warning(f"恢复install_button状态失败: {e}")
         
         try:
-            if hasattr(self, 'install_package_btn') and self.install_package_btn.winfo_exists():
+            if hasattr(self, 'install_package_btn') and self.install_package_btn:
                 self.install_package_btn.configure(state="normal")
                 logger.debug("恢复包安装按钮状态")
         except Exception as e:
