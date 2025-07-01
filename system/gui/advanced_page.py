@@ -498,21 +498,43 @@ class AdvancedPage(ttk.Frame):
         def installation_thread():
             try:
                 python_executable = sys.executable
-                full_command = [python_executable, "-m"] + command_args
+                # 强制使用 python.exe 以确保终端窗口弹出
+                if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
+                    console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
+                    if os.path.exists(console_executable):
+                        python_executable = console_executable
+
+                # 构造安装命令字符串
+                # 关键修正：在这里加上 -m
+                install_cmd_list = [f'"{python_executable}"', '-m'] + command_args
+                install_cmd = " ".join(install_cmd_list)
+
+                # 构造一个完整的 shell 命令
+                # 在安装成功后，会打印成功信息并执行一个5秒的倒计时
+                if platform.system() == "Windows":
+                    # 使用 '&&' 来确保只有在安装成功时才执行后续命令
+                    # 使用 'echo.' 打印空行以获得更好的格式
+                    # 使用 'timeout' 来实现倒计时，'/nobreak' 防止用户跳过
+                    countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak'
+                    final_command = f'{install_cmd} && {countdown_cmd}'
+                else:  # for Linux/macOS
+                    countdown_cmd = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
+                    final_command = f'{install_cmd} && {countdown_cmd}'
 
                 self.master.after(0, lambda: status_var.set("安装已启动..."))
 
-                # 使用 Popen 在后台运行，然后等待它完成
-                process = subprocess.Popen(full_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                           encoding='utf-8',
-                                           creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0)
-                stdout, stderr = process.communicate()
+                # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
+                # 这会弹出一个新的命令行窗口
+                process = subprocess.Popen(final_command, shell=True)
+                process.communicate()  # 等待整个过程（包括倒计时）结束
 
                 if process.returncode == 0:
                     self.master.after(0, lambda: status_var.set("安装成功！"))
                     self.master.after(100, lambda: self._ask_for_restart(success_title))
                 else:
-                    error_message = f"安装失败:\n{stderr or stdout}"
+                    # 如果安装失败, '&&' 会阻止倒计时命令的执行
+                    # 命令行窗口会停留在错误信息界面，等待用户手动关闭
+                    error_message = f"安装失败 (返回码: {process.returncode})。\n请查看命令行窗口获取详细错误信息。"
                     logger.error(error_message)
                     self.master.after(0, lambda: status_var.set("安装失败"))
                     messagebox.showerror("安装错误", error_message)
@@ -563,7 +585,7 @@ class AdvancedPage(ttk.Frame):
         else:
             command_args.extend(["--index-url", "https://download.pytorch.org/whl/cpu"])
 
-        self._run_install_in_terminal(command_args[1:], self.pytorch_status_var, "PyTorch 安装完成")
+        self._run_install_in_terminal(command_args, self.pytorch_status_var, "PyTorch 安装完成")
 
     def _install_python_package(self):
         """准备并启动单个Python包的安装"""
@@ -581,7 +603,7 @@ class AdvancedPage(ttk.Frame):
         self.master.update_idletasks()
 
         command_args = ["pip", "install", "--upgrade", package_spec]
-        self._run_install_in_terminal(command_args[1:], self.package_status_var, f"安装 {package_spec} 完成")
+        self._run_install_in_terminal(command_args, self.package_status_var, f"安装 {package_spec} 完成")
 
     # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
 
