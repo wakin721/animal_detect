@@ -605,7 +605,13 @@ class AdvancedPage(ttk.Frame):
             command_args.append("--force-reinstall")
         command_args.extend([f"torch=={pytorch_version}", "torchvision", "torchaudio"])
         if cuda_version:
-            cuda_str_map = {"11.8": "cu118", "12.1": "cu121"}
+            cuda_str_map = {
+                "11.8": "cu118", 
+                "12.1": "cu121",
+                "12.4": "cu124",
+                "12.6": "cu126", 
+                "12.8": "cu128"
+            }
             cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
             command_args.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_str}"])
         else:
