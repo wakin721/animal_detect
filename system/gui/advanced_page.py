@@ -515,17 +515,53 @@ class AdvancedPage(ttk.Frame):
                     # 使用 '&&' 来确保只有在安装成功时才执行后续命令
                     # 使用 'echo.' 打印空行以获得更好的格式
                     # 使用 'timeout' 来实现倒计时，'/nobreak' 防止用户跳过
-                    countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
+                    countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak && exit'
+                    # 失败时显示错误信息并等待用户按键
+                    failure_cmd = 'echo. && echo Installation failed. Please check the error message above. && pause'
+                    # 使用 'start' 命令来确保新窗口弹出，'/wait' 等待命令完成
+                    # 如果成功则倒计时关闭，如果失败则等待用户按键
+                    final_command = f'start /wait cmd /k "({install_cmd}) && ({countdown_cmd}) || ({failure_cmd})"'
                 else:  # for Linux/macOS
                     countdown_cmd = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
+                    failure_cmd = 'echo "" && echo "Installation failed. Please check the error message above." && read -p "Press Enter to close..."'
+                    if platform.system() == "Darwin":  # macOS
+                        # 使用 osascript 在新的 Terminal 窗口中运行命令
+                        escaped_cmd = f'({install_cmd}) && ({countdown_cmd}) || ({failure_cmd})'.replace('"', '\\"')
+                        final_command = f'osascript -e \'tell application "Terminal" to do script "{escaped_cmd}"\''
+                    else:  # Linux
+                        # 尝试常见的终端模拟器
+                        terminals = ['gnome-terminal', 'xterm', 'konsole', 'x-terminal-emulator']
+                        terminal_found = None
+                        for term in terminals:
+                            try:
+                                subprocess.check_call(['which', term], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                terminal_found = term
+                                break
+                            except subprocess.CalledProcessError:
+                                continue
+                        
+                        if terminal_found:
+                            full_cmd = f'({install_cmd}) && ({countdown_cmd}) || ({failure_cmd})'
+                            if terminal_found == 'gnome-terminal':
+                                final_command = f'{terminal_found} -- bash -c "{full_cmd}"'
+                            elif terminal_found in ['xterm', 'konsole']:
+                                final_command = f'{terminal_found} -e bash -c "{full_cmd}"'
+                            else:
+                                final_command = f'{terminal_found} -e bash -c "{full_cmd}"'
+                        else:
+                            # 如果没有找到终端模拟器，回退到原来的方式
+                            final_command = f'({install_cmd}) && ({countdown_cmd}) || ({failure_cmd})'
 
                 self.master.after(0, lambda: status_var.set("安装已启动..."))
 
-                # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
-                # 这会弹出一个新的命令行窗口
-                process = subprocess.Popen(final_command, shell=True)
+                # 在新终端窗口中执行命令
+                if platform.system() == "Windows":
+                    # Windows使用start命令会启动新窗口
+                    process = subprocess.Popen(final_command, shell=True)
+                else:
+                    # Linux/macOS
+                    process = subprocess.Popen(final_command, shell=True)
+                
                 process.communicate()  # 等待整个过程（包括倒计时）结束
 
                 if process.returncode == 0:
