@@ -505,45 +505,101 @@ class AdvancedPage(ttk.Frame):
                         python_executable = console_executable
 
                 # 构造安装命令字符串
-                # 关键修正：在这里加上 -m
                 install_cmd_list = [f'"{python_executable}"', '-m'] + command_args
                 install_cmd = " ".join(install_cmd_list)
 
-                # 构造一个完整的 shell 命令
-                # 在安装成功后，会打印成功信息并执行一个5秒的倒计时
+                # 构造一个完整的 shell 命令，包含开始提示、安装过程、成功消息和倒计时
                 if platform.system() == "Windows":
-                    # 使用 '&&' 来确保只有在安装成功时才执行后续命令
-                    # 使用 'echo.' 打印空行以获得更好的格式
-                    # 使用 'timeout' 来实现倒计时，'/nobreak' 防止用户跳过
-                    countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
+                    # 增强的Windows命令：显示开始消息、安装进度、成功消息和倒计时
+                    header_cmd = 'echo =================================================='
+                    start_msg = f'echo Starting installation: {" ".join(command_args)}'
+                    progress_msg = 'echo Installing packages, please wait...'
+                    separator = 'echo =================================================='
+                    success_msg = 'echo. && echo ================================================== && echo Installation completed successfully! && echo =================================================='
+                    countdown_msg = 'echo. && echo This window will close automatically in 5 seconds... && echo Press any key to close immediately'
+                    countdown_cmd = f'{success_msg} && {countdown_msg} && timeout /t 5'
+                    
+                    # 使用start命令确保新窗口打开，/k保持窗口打开直到命令完成
+                    terminal_cmd = f'start "Package Installation" cmd /k "{header_cmd} && {start_msg} && {separator} && {progress_msg} && {install_cmd} && {countdown_cmd} && exit"'
                 else:  # for Linux/macOS
-                    countdown_cmd = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
+                    # 增强的Unix命令：支持多种终端
+                    header_cmd = 'echo "=================================================="'
+                    start_msg = f'echo "Starting installation: {" ".join(command_args)}"'
+                    progress_msg = 'echo "Installing packages, please wait..."'
+                    separator = 'echo "=================================================="'
+                    success_msg = 'echo "" && echo "==================================================" && echo "Installation completed successfully!" && echo "=================================================="'
+                    countdown_msg = 'echo "" && echo "This window will close automatically in 5 seconds..." && echo "Press Ctrl+C to close immediately"'
+                    countdown_cmd = f'{success_msg} && {countdown_msg} && sleep 5'
+                    
+                    # 完整的安装命令
+                    full_cmd = f'{header_cmd} && {start_msg} && {separator} && {progress_msg} && {install_cmd} && {countdown_cmd}'
+                    
+                    # 尝试使用不同的终端模拟器
+                    terminal_candidates = [
+                        f'gnome-terminal --title="Package Installation" -- bash -c "{full_cmd}; exec bash"',
+                        f'konsole --title "Package Installation" -e bash -c "{full_cmd}; exec bash"',
+                        f'xfce4-terminal --title="Package Installation" -e bash -c "{full_cmd}; exec bash"',
+                        f'xterm -title "Package Installation" -e bash -c "{full_cmd}; exec bash"',
+                        f'mate-terminal --title="Package Installation" -e bash -c "{full_cmd}; exec bash"',
+                        # 回退到基本的bash执行
+                        full_cmd
+                    ]
+                    
+                    terminal_cmd = None
+                    # 检测可用的终端
+                    for cmd_template in terminal_candidates:
+                        terminal_name = cmd_template.split()[0]
+                        try:
+                            # 检查终端是否可用
+                            subprocess.run(['which', terminal_name], capture_output=True, check=True)
+                            terminal_cmd = cmd_template
+                            break
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            continue
+                    
+                    # 如果没有找到图形终端，使用基本命令
+                    if terminal_cmd is None:
+                        terminal_cmd = full_cmd
 
-                self.master.after(0, lambda: status_var.set("安装已启动..."))
+                self.master.after(0, lambda: status_var.set("正在启动终端窗口..."))
 
-                # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
-                # 这会弹出一个新的命令行窗口
-                process = subprocess.Popen(final_command, shell=True)
-                process.communicate()  # 等待整个过程（包括倒计时）结束
+                # 执行终端命令
+                if platform.system() == "Windows":
+                    # Windows: 使用shell=True执行start命令
+                    process = subprocess.Popen(terminal_cmd, shell=True)
+                else:
+                    # Unix: 直接执行终端命令
+                    process = subprocess.Popen(terminal_cmd, shell=True)
+
+                self.master.after(0, lambda: status_var.set("安装进行中，请查看终端窗口..."))
+                
+                # 等待安装过程完成
+                process.communicate()
 
                 if process.returncode == 0:
                     self.master.after(0, lambda: status_var.set("安装成功！"))
                     self.master.after(100, lambda: self._ask_for_restart(success_title))
                 else:
-                    # 如果安装失败, '&&' 会阻止倒计时命令的执行
-                    # 命令行窗口会停留在错误信息界面，等待用户手动关闭
-                    error_message = f"安装失败 (返回码: {process.returncode})。\n请查看命令行窗口获取详细错误信息。"
+                    # 如果安装失败，显示详细错误信息
+                    error_message = f"安装过程出现问题 (返回码: {process.returncode})。\n" \
+                                  f"这可能是由于网络问题、权限不足或包不存在等原因。\n" \
+                                  f"请检查终端窗口中的详细错误信息。\n\n" \
+                                  f"常见解决方案：\n" \
+                                  f"1. 检查网络连接\n" \
+                                  f"2. 确保有足够的磁盘空间\n" \
+                                  f"3. 尝试使用管理员权限运行"
                     logger.error(error_message)
                     self.master.after(0, lambda: status_var.set("安装失败"))
-                    messagebox.showerror("安装错误", error_message)
+                    self.master.after(0, lambda: messagebox.showerror("安装错误", error_message))
 
             except Exception as e:
                 error_msg = f"执行安装命令时出错: {e}"
                 logger.error(error_msg)
                 self.master.after(0, lambda: status_var.set(f"启动失败: {e}"))
+                self.master.after(0, lambda: messagebox.showerror("启动错误", 
+                    f"无法启动安装过程：{e}\n\n请检查：\n1. Python环境是否正确配置\n2. 系统是否支持打开新终端窗口\n3. 是否有足够的系统权限"))
             finally:
+                # 重新启用按钮
                 self.master.after(0, lambda: self.install_button.configure(state="normal"))
                 if hasattr(self, 'install_package_btn'):
                     self.master.after(0, lambda: self.install_package_btn.configure(state="normal"))
