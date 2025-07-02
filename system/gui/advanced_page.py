@@ -523,9 +523,35 @@ class AdvancedPage(ttk.Frame):
 
                 self.master.after(0, lambda: status_var.set("安装已启动..."))
 
-                # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
-                # 这会弹出一个新的命令行窗口
-                process = subprocess.Popen(final_command, shell=True)
+                # 使用平台特定的方法来在新的终端窗口中执行命令
+                if platform.system() == "Windows":
+                    # Windows: 使用 CREATE_NEW_CONSOLE 标志在新控制台窗口中执行
+                    # CREATE_NEW_CONSOLE = 0x00000010
+                    process = subprocess.Popen(
+                        final_command, 
+                        shell=True, 
+                        creationflags=0x00000010  # CREATE_NEW_CONSOLE
+                    )
+                else:
+                    # Linux/macOS: 尝试使用常见的终端模拟器
+                    terminal_commands = [
+                        ['gnome-terminal', '--', 'bash', '-c', final_command],
+                        ['xterm', '-e', f'bash -c "{final_command}"'],
+                        ['konsole', '-e', 'bash', '-c', final_command],
+                        ['x-terminal-emulator', '-e', f'bash -c "{final_command}"']
+                    ]
+                    
+                    process = None
+                    for cmd in terminal_commands:
+                        try:
+                            process = subprocess.Popen(cmd)
+                            break
+                        except FileNotFoundError:
+                            continue
+                    
+                    if process is None:
+                        # 如果没有找到合适的终端，回退到无窗口模式
+                        process = subprocess.Popen(final_command, shell=True)
                 process.communicate()  # 等待整个过程（包括倒计时）结束
 
                 if process.returncode == 0:
@@ -579,7 +605,13 @@ class AdvancedPage(ttk.Frame):
             command_args.append("--force-reinstall")
         command_args.extend([f"torch=={pytorch_version}", "torchvision", "torchaudio"])
         if cuda_version:
-            cuda_str_map = {"11.8": "cu118", "12.1": "cu121"}
+            cuda_str_map = {
+                "11.8": "cu118", 
+                "12.1": "cu121",
+                "12.4": "cu124",
+                "12.6": "cu126", 
+                "12.8": "cu128"
+            }
             cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
             command_args.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_str}"])
         else:
