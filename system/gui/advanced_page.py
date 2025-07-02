@@ -497,58 +497,163 @@ class AdvancedPage(ttk.Frame):
 
         def installation_thread():
             try:
-                python_executable = sys.executable
-                # 强制使用 python.exe 以确保终端窗口弹出
-                if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
-                    console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
-                    if os.path.exists(console_executable):
-                        python_executable = console_executable
-
-                # 构造安装命令字符串
-                # 关键修正：在这里加上 -m
-                install_cmd_list = [f'"{python_executable}"', '-m'] + command_args
+                # 检测虚拟环境并获取正确的可执行文件路径
+                python_executable, pip_executable = self._detect_virtual_environment()
+                
+                # 构造安装命令
+                # 如果命令参数以 'pip' 开头，使用虚拟环境的pip可执行文件
+                if command_args and command_args[0] == 'pip':
+                    # 替换 'pip' 为完整的pip路径
+                    install_cmd_list = [f'"{pip_executable}"'] + command_args[1:]
+                else:
+                    # 其他情况使用 python -m
+                    install_cmd_list = [f'"{python_executable}"', '-m'] + command_args
+                
                 install_cmd = " ".join(install_cmd_list)
-
-                # 构造一个完整的 shell 命令
-                # 在安装成功后，会打印成功信息并执行一个5秒的倒计时
-                if platform.system() == "Windows":
-                    # 使用 '&&' 来确保只有在安装成功时才执行后续命令
-                    # 使用 'echo.' 打印空行以获得更好的格式
-                    # 使用 'timeout' 来实现倒计时，'/nobreak' 防止用户跳过
-                    countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
-                else:  # for Linux/macOS
-                    countdown_cmd = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
-
+                
+                # 构造跨平台的终端命令
+                final_command = self._construct_terminal_command(install_cmd)
+                
                 self.master.after(0, lambda: status_var.set("安装已启动..."))
+                logger.info(f"执行安装命令: {final_command}")
 
-                # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
-                # 这会弹出一个新的命令行窗口
-                process = subprocess.Popen(final_command, shell=True)
+                # 执行命令并等待完成
+                if platform.system() == "Windows":
+                    # Windows需要特殊处理以确保新窗口弹出
+                    process = subprocess.Popen(
+                        final_command, 
+                        shell=True,
+                        creationflags=subprocess.CREATE_NEW_CONSOLE
+                    )
+                else:
+                    # Linux/macOS
+                    process = subprocess.Popen(final_command, shell=True)
+                
                 process.communicate()  # 等待整个过程（包括倒计时）结束
 
                 if process.returncode == 0:
                     self.master.after(0, lambda: status_var.set("安装成功！"))
                     self.master.after(100, lambda: self._ask_for_restart(success_title))
                 else:
-                    # 如果安装失败, '&&' 会阻止倒计时命令的执行
-                    # 命令行窗口会停留在错误信息界面，等待用户手动关闭
+                    # 安装失败的情况
                     error_message = f"安装失败 (返回码: {process.returncode})。\n请查看命令行窗口获取详细错误信息。"
                     logger.error(error_message)
                     self.master.after(0, lambda: status_var.set("安装失败"))
-                    messagebox.showerror("安装错误", error_message)
+                    self.master.after(0, lambda: messagebox.showerror("安装错误", error_message))
 
             except Exception as e:
                 error_msg = f"执行安装命令时出错: {e}"
                 logger.error(error_msg)
                 self.master.after(0, lambda: status_var.set(f"启动失败: {e}"))
+                self.master.after(0, lambda: messagebox.showerror("安装错误", error_msg))
             finally:
+                # 重新启用按钮
                 self.master.after(0, lambda: self.install_button.configure(state="normal"))
                 if hasattr(self, 'install_package_btn'):
                     self.master.after(0, lambda: self.install_package_btn.configure(state="normal"))
 
         threading.Thread(target=installation_thread, daemon=True).start()
+
+    def _detect_virtual_environment(self):
+        """检测虚拟环境并返回正确的python和pip可执行文件路径"""
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        venv_dir = os.path.join(base_dir, ".venv")
+        
+        # 检查是否在虚拟环境中运行
+        in_venv = hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
+        
+        if in_venv and os.path.exists(venv_dir):
+            # 在虚拟环境中，使用虚拟环境的可执行文件
+            if os.name == 'nt':  # Windows
+                venv_python = os.path.join(venv_dir, "Scripts", "python.exe")
+                venv_pip = os.path.join(venv_dir, "Scripts", "pip.exe")
+            else:  # Linux/Mac
+                venv_python = os.path.join(venv_dir, "bin", "python")
+                venv_pip = os.path.join(venv_dir, "bin", "pip")
+            
+            # 验证可执行文件是否存在
+            if os.path.exists(venv_python) and os.path.exists(venv_pip):
+                logger.info(f"使用虚拟环境: {venv_dir}")
+                return venv_python, venv_pip
+        
+        # 回退到系统的python和pip
+        python_executable = sys.executable
+        
+        # 强制使用 python.exe 以确保终端窗口弹出（Windows）
+        if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
+            console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
+            if os.path.exists(console_executable):
+                python_executable = console_executable
+        
+        # pip通常和python在同一个目录
+        if os.name == 'nt':
+            pip_executable = os.path.join(os.path.dirname(python_executable), 'pip.exe')
+            if not os.path.exists(pip_executable):
+                # 如果pip.exe不存在，回退到python -m pip
+                pip_executable = f'"{python_executable}" -m pip'
+        else:
+            pip_executable = os.path.join(os.path.dirname(python_executable), 'pip')
+            if not os.path.exists(pip_executable):
+                # 如果pip不存在，回退到python -m pip
+                pip_executable = f'"{python_executable}" -m pip'
+        
+        logger.info(f"使用系统Python: {python_executable}")
+        return python_executable, pip_executable
+
+    def _construct_terminal_command(self, install_cmd):
+        """构造跨平台的终端命令，确保在新窗口中显示并自动关闭"""
+        if platform.system() == "Windows":
+            # Windows命令构造
+            # 使用cmd /c来确保命令执行完毕后窗口关闭
+            # 添加成功提示和倒计时
+            countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak'
+            # 失败时显示错误信息并等待用户按键
+            error_cmd = 'echo. && echo Installation failed. Press any key to close this window... && pause >nul'
+            
+            # 使用IF ERRORLEVEL来检测命令执行结果
+            final_command = f'cmd /c "({install_cmd}) && ({countdown_cmd}) || ({error_cmd})"'
+            
+        else:  # Linux/macOS
+            # 检测可用的终端模拟器
+            terminals = [
+                'gnome-terminal',  # GNOME
+                'konsole',         # KDE
+                'xfce4-terminal',  # XFCE
+                'mate-terminal',   # MATE
+                'lxterminal',      # LXDE
+                'xterm',           # 基本的X终端
+                'x-terminal-emulator'  # Debian/Ubuntu默认
+            ]
+            
+            terminal_cmd = None
+            for term in terminals:
+                if subprocess.run(['which', term], capture_output=True).returncode == 0:
+                    terminal_cmd = term
+                    break
+            
+            if terminal_cmd:
+                # 构造成功和失败的处理命令
+                countdown_cmd = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
+                error_cmd = 'echo "" && echo "Installation failed. Press Enter to close this window..." && read'
+                
+                # 使用bash的条件执行
+                script_cmd = f'({install_cmd}) && ({countdown_cmd}) || ({error_cmd})'
+                
+                if terminal_cmd in ['gnome-terminal', 'mate-terminal']:
+                    final_command = f'{terminal_cmd} --title="Package Installation" -- bash -c "{script_cmd}"'
+                elif terminal_cmd == 'konsole':
+                    final_command = f'{terminal_cmd} --title "Package Installation" -e bash -c "{script_cmd}"'
+                elif terminal_cmd in ['xfce4-terminal', 'lxterminal']:
+                    final_command = f'{terminal_cmd} --title="Package Installation" -e bash -c "{script_cmd}"'
+                else:  # xterm and others
+                    final_command = f'{terminal_cmd} -title "Package Installation" -e bash -c "{script_cmd}"'
+            else:
+                # 如果没有找到图形终端，回退到基本命令
+                logger.warning("未找到图形终端，使用基本命令执行")
+                countdown_cmd = 'echo "Installation successful." && sleep 2'
+                final_command = f'({install_cmd}) && ({countdown_cmd})'
+        
+        return final_command
 
     def _install_pytorch(self):
         """准备并启动PyTorch安装"""
