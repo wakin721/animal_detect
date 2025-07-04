@@ -1,3 +1,4 @@
+# system/gui/main_window.py
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import os
@@ -19,8 +20,8 @@ from system.image_processor import ImageProcessor
 from system.metadata_extractor import ImageMetadataExtractor
 from system.data_processor import DataProcessor
 from system.settings_manager import SettingsManager
-# 重点：导入新的和修改后的函数
-from system.update_checker import check_for_updates, get_latest_version_info, compare_versions, start_download_thread
+from system.update_checker import check_for_updates, get_latest_version_info, compare_versions, start_download_thread, \
+    _show_messagebox
 
 # Import GUI components
 from system.gui.sidebar import Sidebar
@@ -44,24 +45,19 @@ class ObjectDetectionGUI:
         self.resume_processing = resume_processing
         self.cache_data = cache_data
         self.current_temp_photo_dir = None
-
         self.is_dark_mode = False
         self.accent_color = "#0078d7"
         import torch
         self.cuda_available = torch.cuda.is_available()
-
         self.is_processing = False
         self.processing_stop_flag = threading.Event()
         self.excel_data = []
         self.current_page = "settings"
-
-        # 为更新通道添加变量
         self.update_channel_var = tk.StringVar(value="稳定版 (Release)")
 
         self._apply_system_theme()
         self._setup_window()
         self._initialize_model()
-
         self._setup_styles()
         self._create_ui_elements()
         self._bind_events()
@@ -69,46 +65,62 @@ class ObjectDetectionGUI:
         if self.settings:
             self._load_settings_to_ui(self.settings)
 
+        # 确保UI完全加载后再执行启动检查
+        self._check_for_updates(silent=True)
+
         if not self.image_processor.model:
             messagebox.showerror("错误", "未找到有效的模型文件(.pt)。请在res目录中放入至少一个模型文件。")
             if hasattr(self, 'start_page') and hasattr(self.start_page, 'start_stop_button'):
                 self.start_page.start_stop_button["state"] = "disabled"
-
         if self.resume_processing and self.cache_data:
             self.master.after(1000, self._resume_processing)
-
         self.setup_theme_monitoring()
         if hasattr(self, 'preview_page'):
             self.preview_page._load_validation_data()
 
-    def clear_image_cache(self):
-        """确认并清除整个图片缓存目录 (temp/photo)"""
-        cache_dir = os.path.join(self.settings_manager.base_dir, "temp", "photo")
-
-        if messagebox.askyesno("确认清除缓存",
-                               f"是否清空图片缓存？\n\n此操作将删除以下文件夹内的所有内容：\n{cache_dir}\n\n注意：这不会影响您的原始图片或已保存的结果。",
-                               parent=self.master):
-            if os.path.exists(cache_dir):
-                try:
-                    shutil.rmtree(cache_dir)
-                    os.makedirs(cache_dir, exist_ok=True)
-                    messagebox.showinfo("成功", "图片缓存已成功清除。", parent=self.master)
-                except Exception as e:
-                    messagebox.showerror("错误", f"清除缓存时发生错误：\n{e}", parent=self.master)
-            else:
-                messagebox.showinfo("提示", "缓存目录不存在，请尝试选择文件目录以生成缓存目录。", parent=self.master)
+    # --- 更新检查逻辑 ---
 
     def _check_for_updates(self, silent=False):
-        """静默检查更新（程序启动时）"""
-        update_thread = threading.Thread(
-            target=check_for_updates,
-            args=(self.master, silent),
-            daemon=True
-        )
-        update_thread.start()
+        """
+        在程序启动时，根据用户设置的通道静默检查更新。
+        这个方法现在是启动时检查的唯一入口。
+        """
+        def _startup_check_thread():
+            """后台线程，用于处理启动时的静默更新检查。"""
+            try:
+                channel_selection = self.update_channel_var.get()
+                channel = 'preview' if '预览版' in channel_selection else 'stable'
+                latest_info = get_latest_version_info(channel)
+
+                if not latest_info:
+                    return  # Silently fail
+
+                remote_version = latest_info['version']
+
+                if compare_versions(APP_VERSION, remote_version):
+                    if self.master.winfo_exists():
+                        # 调用主窗口的方法来更新侧边栏
+                        self.master.after(0, self.show_update_notification_on_sidebar)
+
+                # 非静默模式下弹窗提示 (will not trigger on startup)
+                if not silent and self.master.winfo_exists():
+                    update_message = f"新版本 ({remote_version}) 可用，是否前往高级设置进行更新？"
+                    _show_messagebox(self.master, "发现新版本", update_message, "info")
+
+            except Exception as e:
+                logger.error(f"启动时检查更新失败: {e}")
+                if not silent and self.master.winfo_exists():
+                    _show_messagebox(self.master, "更新错误", f"检查更新失败: {e}", "error")
+
+        self.master.after(2000, lambda: threading.Thread(target=_startup_check_thread, daemon=True).start())
+
+    def show_update_notification_on_sidebar(self):
+        """这是一个专门从后台线程安全调用UI更新的方法。"""
+        if hasattr(self, 'sidebar'):
+            self.sidebar.show_update_notification()
 
     def check_for_updates_from_ui(self):
-        """从高级设置UI触发的更新检查"""
+        """从高级设置UI手动触发的更新检查。"""
         channel_selection = self.update_channel_var.get()
         channel = 'preview' if '预览版' in channel_selection else 'stable'
 
@@ -118,36 +130,45 @@ class ObjectDetectionGUI:
         button.config(state="disabled")
         status_label.config(text=f"正在检查 '{channel_selection}' ...")
 
-        threading.Thread(target=self._update_check_thread, args=(channel, status_label, button), daemon=True).start()
+        threading.Thread(target=self._manual_update_check_thread, args=(channel, status_label, button),
+                         daemon=True).start()
 
-    def _update_check_thread(self, channel, status_label, button):
-        """在后台线程中执行更新检查并更新UI"""
+    def _manual_update_check_thread(self, channel, status_label, button):
+        """后台线程，用于处理手动点击“检查更新”的逻辑。"""
         try:
             latest_info = get_latest_version_info(channel)
 
             if not latest_info:
-                self.master.after(0, lambda: status_label.config(text="检查失败，请重试。"))
-                messagebox.showerror("更新错误", "无法获取远程版本信息。", parent=self.master)
+                if self.master.winfo_exists():
+                    self.master.after(0, lambda: status_label.config(text="检查失败，请重试。"))
+                    _show_messagebox(self.master, "更新错误", "无法获取远程版本信息。", "error")
                 return
 
             remote_version = latest_info['version']
 
             if compare_versions(APP_VERSION, remote_version):
-                self.master.after(0, lambda: status_label.config(text=f"发现新版本: {remote_version}"))
-                update_message = f"发现新版本: {remote_version}\n\n{latest_info.get('notes', '')}\n\n是否立即下载并安装？"
-                if messagebox.askyesno("发现新版本", update_message, parent=self.master):
-                    start_download_thread(self.master, latest_info['url'])
+                if self.master.winfo_exists():
+                    # 调用主窗口的方法来更新侧边栏
+                    self.master.after(0, self.show_update_notification_on_sidebar)
+                    self.master.after(0, lambda: status_label.config(text=f"发现新版本: {remote_version}"))
+                    update_message = f"发现新版本: {remote_version}\n\n更新日志:\n{latest_info.get('notes', '无')}\n\n是否立即下载并安装？"
+                    if messagebox.askyesno("发现新版本", update_message, parent=self.master):
+                        start_download_thread(self.master, latest_info['url'])
             else:
-                self.master.after(0, lambda: status_label.config(text=f"当前已是最新版本 ({APP_VERSION})"))
-                messagebox.showinfo("无更新", "您目前使用的是最新版本。", parent=self.master)
+                if self.master.winfo_exists():
+                    self.master.after(0, lambda: status_label.config(text=f"当前已是最新版本 ({APP_VERSION})"))
+                    _show_messagebox(self.master, "无更新", "您目前使用的是最新版本。", "info")
 
         except Exception as e:
             logger.error(f"UI检查更新失败: {e}")
-            self.master.after(0, lambda: status_label.config(text="检查更新时出错。"))
-            messagebox.showerror("更新错误", f"检查更新时发生错误: {e}", parent=self.master)
+            if self.master.winfo_exists():
+                self.master.after(0, lambda: status_label.config(text="检查更新时出错。"))
+                _show_messagebox(self.master, "更新错误", f"检查更新时发生错误: {e}", "error")
         finally:
-            self.master.after(0, lambda: button.config(state="normal"))
+            if self.master.winfo_exists() and button.winfo_exists():
+                self.master.after(0, lambda: button.config(state="normal"))
 
+    # --- 其他函数保持不变 ---
     def _apply_system_theme(self):
         try:
             import darkdetect
@@ -237,46 +258,36 @@ class ObjectDetectionGUI:
     def _create_ui_elements(self):
         self.master.columnconfigure(1, weight=1)
         self.master.rowconfigure(0, weight=1)
-
         self.sidebar = Sidebar(self.master, self)
         self.sidebar.grid(row=0, column=0, sticky="ns")
-
         self.content_frame = ttk.Frame(self.master)
         self.content_frame.grid(row=0, column=1, sticky="nsew")
         self.content_frame.columnconfigure(0, weight=1)
         self.content_frame.rowconfigure(0, weight=1)
-
         self.start_page = StartPage(self.content_frame, self)
         self.preview_page = PreviewPage(self.content_frame, self)
         self.advanced_page = AdvancedPage(self.content_frame, self)
         self.about_page = AboutPage(self.content_frame, self)
-
         self._show_page("settings")
-
         self.status_bar = InfoBar(self.master)
         self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
-
         if hasattr(self, 'advanced_page') and hasattr(self.advanced_page, 'model_combobox'):
             self.advanced_page._refresh_model_list()
 
     def _setup_styles(self):
         style = ttk.Style()
         sidebar_bg = self.accent_color
-
         sidebar_fg = "#FFFFFF"
         highlight_color = "#FFFFFF"
-
         self.sidebar_bg = sidebar_bg
         self.sidebar_fg = sidebar_fg
         self.highlight_color = highlight_color
-
         try:
             r, g, b = self.master.winfo_rgb(sidebar_bg)
             r, g, b = r // 257, g // 257, b // 257
             self.sidebar_hover_bg = f"#{min(255, r + 30):02x}{min(255, g + 30):02x}{min(255, b + 30):02x}"
         except tk.TclError:
             self.sidebar_hover_bg = sidebar_bg
-
         style.configure("Sidebar.TFrame", background=sidebar_bg)
         style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"), padding=(0, 10, 0, 10))
         style.configure("Process.TButton", font=("Segoe UI", 11), padding=(10, 5))
@@ -287,7 +298,6 @@ class ObjectDetectionGUI:
         self.preview_page.pack_forget()
         self.advanced_page.pack_forget()
         self.about_page.pack_forget()
-
         if page_id == "settings":
             self.start_page.pack(fill="both", expand=True)
         elif page_id == "preview":
@@ -295,8 +305,7 @@ class ObjectDetectionGUI:
             if hasattr(self, 'start_page'):
                 file_path = self.start_page.file_path_entry.get()
                 if file_path and os.path.isdir(file_path):
-                    if self.preview_page.file_listbox.size() == 0:
-                        self.preview_page.update_file_list(file_path)
+                    if self.preview_page.file_listbox.size() == 0: self.preview_page.update_file_list(file_path)
                     if self.preview_page.file_listbox.size() > 0 and not self.preview_page.file_listbox.curselection():
                         self.preview_page.file_listbox.selection_set(0)
                         self.preview_page.on_file_selected(None)
@@ -308,15 +317,11 @@ class ObjectDetectionGUI:
 
     def _bind_events(self):
         self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-        # 仅在按下回车时验证路径
         self.start_page.file_path_entry.bind("<Return>", self._validate_and_update_file_path)
         self.start_page.save_path_entry.bind("<Return>", self._validate_and_update_save_path)
-
         self.preview_page.file_listbox.bind("<<ListboxSelect>>", self.preview_page.on_file_selected)
         self.preview_page.image_label.bind("<Double-1>", self.preview_page.on_image_double_click)
         self.preview_page.show_detection_var.trace("w", self.preview_page.toggle_detection_preview)
-
         self.start_page.save_detect_image_var.trace("w", lambda *args: self._save_current_settings())
         self.start_page.output_excel_var.trace("w", lambda *args: self._save_current_settings())
         self.start_page.copy_img_var.trace("w", lambda *args: self._save_current_settings())
@@ -325,27 +330,23 @@ class ObjectDetectionGUI:
         self.advanced_page.controller.conf_var.trace("w", lambda *args: self._save_current_settings())
         self.advanced_page.controller.use_augment_var.trace("w", lambda *args: self._save_current_settings())
         self.advanced_page.controller.use_agnostic_nms_var.trace("w", lambda *args: self._save_current_settings())
+        self.update_channel_var.trace("w", lambda *args: self._save_current_settings())
 
     def _save_current_settings(self):
-        if not self.settings_manager:
-            return
+        if not self.settings_manager: return
         settings = self._get_current_settings()
-        if self.settings_manager.save_settings(settings):
-            logger.info("设置已保存")
+        if self.settings_manager.save_settings(settings): logger.info("设置已保存")
 
     def _get_current_settings(self):
-        return {
-            "file_path": self.start_page.file_path_entry.get(),
-            "save_path": self.start_page.save_path_entry.get(),
-            "save_detect_image": self.start_page.save_detect_image_var.get(),
-            "output_excel": self.start_page.output_excel_var.get(),
-            "copy_img": self.start_page.copy_img_var.get(),
-            "use_fp16": self.advanced_page.controller.use_fp16_var.get(),
-            "iou": self.advanced_page.controller.iou_var.get(),
-            "conf": self.advanced_page.controller.conf_var.get(),
-            "use_augment": self.advanced_page.controller.use_augment_var.get(),
-            "use_agnostic_nms": self.advanced_page.controller.use_agnostic_nms_var.get()
-        }
+        return {"file_path": self.start_page.file_path_entry.get(), "save_path": self.start_page.save_path_entry.get(),
+                "save_detect_image": self.start_page.save_detect_image_var.get(),
+                "output_excel": self.start_page.output_excel_var.get(), "copy_img": self.start_page.copy_img_var.get(),
+                "use_fp16": self.advanced_page.controller.use_fp16_var.get(),
+                "iou": self.advanced_page.controller.iou_var.get(),
+                "conf": self.advanced_page.controller.conf_var.get(),
+                "use_augment": self.advanced_page.controller.use_augment_var.get(),
+                "use_agnostic_nms": self.advanced_page.controller.use_agnostic_nms_var.get(),
+                "update_channel": self.update_channel_var.get()}
 
     def _load_settings_to_ui(self, settings: dict):
         try:
@@ -354,15 +355,12 @@ class ObjectDetectionGUI:
                 self.start_page.file_path_entry.insert(0, settings["file_path"])
                 self.get_temp_photo_dir(update=True)
                 self.preview_page.update_file_list(settings["file_path"])
-
             if "save_path" in settings and settings["save_path"]:
                 self.start_page.save_path_entry.delete(0, tk.END)
                 self.start_page.save_path_entry.insert(0, settings["save_path"])
-
             self.start_page.save_detect_image_var.set(settings.get("save_detect_image", True))
             self.start_page.output_excel_var.set(settings.get("output_excel", True))
             self.start_page.copy_img_var.set(settings.get("copy_img", False))
-
             self.advanced_page.controller.use_fp16_var.set(settings.get("use_fp16", False))
             self.advanced_page.controller.iou_var.set(settings.get("iou", 0.3))
             self.advanced_page.controller.conf_var.set(settings.get("conf", 0.25))
@@ -370,16 +368,15 @@ class ObjectDetectionGUI:
             self.advanced_page.controller.use_agnostic_nms_var.set(settings.get("use_agnostic_nms", True))
             self.advanced_page._update_iou_label(settings.get("iou", 0.3))
             self.advanced_page._update_conf_label(settings.get("conf", 0.25))
+            self.update_channel_var.set(settings.get("update_channel", "稳定版 (Release)"))
         except Exception as e:
             logger.error(f"加载设置到UI失败: {e}")
 
     def on_closing(self):
         if self.is_processing:
-            if not messagebox.askyesno("确认退出", "图像处理正在进行中，确定要退出吗？"):
-                return
+            if not messagebox.askyesno("确认退出", "图像处理正在进行中，确定要退出吗？"): return
             self.processing_stop_flag.set()
-        if hasattr(self, 'preview_page'):
-            self.preview_page._save_validation_data()
+        if hasattr(self, 'preview_page'): self.preview_page._save_validation_data()
         self._save_current_settings()
         self.master.destroy()
 
@@ -391,33 +388,29 @@ class ObjectDetectionGUI:
             self._validate_and_update_file_path()
 
     def _validate_and_update_file_path(self, event=None):
-        # 获取输入并移除前后空格
         folder_selected = self.start_page.file_path_entry.get().strip()
-
-        # 如果移除空格后路径为空，则直接返回
-        if not folder_selected:
-            return
-
-        # 检查路径是否为有效目录
+        if not folder_selected: return
         if os.path.isdir(folder_selected):
-            # 使用清理过的路径更新UI和设置
             self.start_page.file_path_entry.delete(0, tk.END)
             self.start_page.file_path_entry.insert(0, folder_selected)
-
             self.get_temp_photo_dir(update=True)
             self.preview_page.update_file_list(folder_selected)
             self.status_bar.status_label.config(text=f"文件路径已设置为: {folder_selected}")
             self._save_current_settings()
         else:
-            # 路径无效，每次都显示错误信息
             messagebox.showerror("路径错误", f"提供的图像文件路径不存在或不是一个文件夹:\n'{folder_selected}'")
             self.status_bar.status_label.config(text="无效的文件路径")
 
+    def browse_save_path(self):
+        folder_selected = filedialog.askdirectory(title="选择结果保存文件夹")
+        if folder_selected:
+            self.start_page.save_path_entry.delete(0, tk.END)
+            self.start_page.save_path_entry.insert(0, folder_selected)
+            self._validate_and_update_save_path()
+
     def _validate_and_update_save_path(self, event=None):
         save_path = self.start_page.save_path_entry.get().strip()
-        if not save_path:
-            return
-
+        if not save_path: return
         if not os.path.isdir(save_path):
             if messagebox.askyesno("确认创建路径", f"结果保存路径不存在，是否要创建它？\n\n{save_path}"):
                 try:
@@ -437,13 +430,46 @@ class ObjectDetectionGUI:
             self.status_bar.status_label.config(text=f"结果保存路径已设置: {save_path}")
             self._save_current_settings()
 
-    def browse_save_path(self):
-        folder_selected = filedialog.askdirectory(title="选择结果保存文件夹")
-        if folder_selected:
-            self.start_page.save_path_entry.delete(0, tk.END)
-            self.start_page.save_path_entry.insert(0, folder_selected)
-            self._validate_and_update_save_path()
+    def show_params_help(self):
+        help_text = """
+        **检测阈值设置**
+        - **IOU阈值:** 控制对象检测中非极大值抑制（NMS）的重叠阈值。较高的值会减少重叠框，但可能导致部分目标漏检。
+        - **置信度阈值:** 检测对象的最小置信度分数。较高的值只显示高置信度的检测结果，减少误检。
 
+        **模型加速选项**
+        - **使用FP16加速:** 使用半精度浮点数进行推理，可以加快速度但可能会略微降低精度。需要兼容的NVIDIA GPU。
+
+        **高级检测选项**
+        - **使用数据增强:** 在测试时使用数据增强（TTA），通过对输入图像进行多种变换并综合结果，可能会提高准确性，但会显著降低处理速度。
+        - **使用类别无关NMS:** 在所有类别上一起执行NMS，对于检测多种相互重叠的物种可能有用。
+        """
+        messagebox.showinfo("参数说明", help_text, parent=self.master)
+
+    def get_temp_photo_dir(self, update=False):
+        source_path = self.start_page.file_path_entry.get()
+        if not source_path: return None
+        path_hash = hashlib.md5(source_path.encode()).hexdigest()
+        base_dir = self.settings_manager.base_dir
+        temp_dir = os.path.join(base_dir, "temp", "photo", path_hash)
+        if update:
+            self.current_temp_photo_dir = temp_dir
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
+
+    def clear_image_cache(self):
+        cache_dir = os.path.join(self.settings_manager.base_dir, "temp", "photo")
+        if messagebox.askyesno("确认清除缓存",
+                               f"是否清空图片缓存？\n\n此操作将删除以下文件夹及其所有内容：\n{cache_dir}\n\n注意：这不会影响您的原始图片或已保存的结果。",
+                               parent=self.master):
+            if os.path.exists(cache_dir):
+                try:
+                    shutil.rmtree(cache_dir)
+                    os.makedirs(cache_dir, exist_ok=True)
+                    messagebox.showinfo("成功", "图片缓存已成功清除。", parent=self.master)
+                except Exception as e:
+                    messagebox.showerror("错误", f"清除缓存时发生错误：\n{e}", parent=self.master)
+            else:
+                messagebox.showinfo("提示", "缓存目录不存在，无需清除。", parent=self.master)
 
     def toggle_processing_state(self):
         if not self.is_processing:
@@ -478,16 +504,12 @@ class ObjectDetectionGUI:
         copy_img = self.start_page.copy_img_var.get()
         use_fp16 = self.advanced_page.controller.use_fp16_var.get()
 
-        if not self._validate_inputs(file_path, save_path):
-            return
-        if self.is_processing:
-            return
+        if not self._validate_inputs(file_path, save_path): return
+        if self.is_processing: return
         if not any([save_detect_image, output_excel, copy_img]):
             messagebox.showerror("错误", "请至少选择一个处理功能。")
             return
 
-        # If batch processing starts and the preview page is on the validation tab,
-        # automatically switch to the image preview tab.
         selected_tab_id = self.preview_page.preview_notebook.select()
         if selected_tab_id:
             tab_text = self.preview_page.preview_notebook.tab(selected_tab_id, "text")
@@ -519,7 +541,6 @@ class ObjectDetectionGUI:
         processed_files = resume_from
         stopped_manually = False
         earliest_date = None
-
         temp_photo_dir = self.get_temp_photo_dir()
 
         try:
@@ -541,68 +562,57 @@ class ObjectDetectionGUI:
                     stopped_manually = True
                     break
 
-                self.master.after(0, lambda f=filename: self.status_bar.status_label.config(text=f"正在处理: {f}"))
+                if self.master.winfo_exists():
+                    self.master.after(0, lambda f=filename: self.status_bar.status_label.config(text=f"正在处理: {f}"))
                 try:
                     listbox_idx = self.preview_page.file_listbox.get(0, "end").index(filename)
-                    self.master.after(0, lambda i=listbox_idx: (
-                        self.preview_page.file_listbox.selection_clear(0, "end"),
-                        self.preview_page.file_listbox.selection_set(i),
-                        self.preview_page.file_listbox.see(i)
-                    ))
+                    if self.master.winfo_exists():
+                        self.master.after(0, lambda i=listbox_idx: (
+                            self.preview_page.file_listbox.selection_clear(0, "end"),
+                            self.preview_page.file_listbox.selection_set(i),
+                            self.preview_page.file_listbox.see(i)
+                        ))
                 except ValueError:
                     pass
 
                 elapsed_time = time.time() - start_time
                 speed = (processed_files - resume_from + 1) / elapsed_time if elapsed_time > 0 else 0
-                if speed > 0:
-                    remaining_files = total_files - (processed_files + 1)
-                    remaining_time = remaining_files / speed if speed > 0 else float('inf')
-                else:
-                    remaining_time = float('inf')
+                remaining_time = (total_files - (processed_files + 1)) / speed if speed > 0 else float('inf')
 
-                self.master.after(0, lambda p=processed_files + 1, t=total_files, s=speed, r=remaining_time:
-                self.start_page.progress_frame.update_progress(
-                    value=p, total=t, speed=s, remaining_time=r
-                ))
+                if self.master.winfo_exists():
+                    self.master.after(0, lambda p=processed_files + 1, t=total_files, s=speed, r=remaining_time:
+                    self.start_page.progress_frame.update_progress(value=p, total=t, speed=s, remaining_time=r))
 
                 try:
                     img_path = os.path.join(file_path, filename)
                     image_info, img = ImageMetadataExtractor.extract_metadata(img_path, filename)
                     species_info = self.image_processor.detect_species(img_path, use_fp16, iou, conf, augment,
-                                                                       agnostic_nms, timeout=10.0)
-
+                                                                       agnostic_nms)
                     species_info['检测时间'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
                     detect_results = species_info.get('detect_results')
                     if detect_results:
                         self.image_processor.save_detection_temp(detect_results, filename, temp_photo_dir)
                         self.image_processor.save_detection_info_json(detect_results, filename, species_info,
                                                                       temp_photo_dir)
-
-                        self.master.after(0, lambda p=img_path, d=detect_results, info=species_info.copy(): (
-                            self.preview_page.update_image_preview(p, show_detection=True, detection_results=d),
-                            self.preview_page.update_image_info(p, os.path.basename(p)),
-                            self.preview_page._update_detection_info(info)
-                        ))
-
-                    if save_detect_image:
-                        self.image_processor.save_detection_result(species_info['detect_results'], filename, save_path)
-                    if copy_img and img:
-                        self._copy_image_by_species(img_path, save_path, species_info['物种名称'].split(','))
-
-                    if 'detect_results' in species_info:
-                        del species_info['detect_results']
-
+                        if self.master.winfo_exists():
+                            self.master.after(0, lambda p=img_path, d=detect_results, info=species_info.copy(): (
+                                self.preview_page.update_image_preview(p, show_detection=True, detection_results=d),
+                                self.preview_page.update_image_info(p, os.path.basename(p)),
+                                self.preview_page._update_detection_info(info)
+                            ))
+                    if save_detect_image: self.image_processor.save_detection_result(detect_results, filename,
+                                                                                     save_path)
+                    if copy_img and img: self._copy_image_by_species(img_path, save_path,
+                                                                     species_info['物种名称'].split(','))
+                    if 'detect_results' in species_info: del species_info['detect_results']
                     image_info.update(species_info)
                     excel_data.append(image_info)
                 except Exception as e:
                     logger.error(f"处理文件 {filename} 失败: {e}")
-
                 processed_files += 1
-                if processed_files % 10 == 0:
-                    self._save_processing_cache(excel_data, file_path, save_path, save_detect_image, output_excel,
-                                                copy_img, use_fp16, processed_files, total_files)
-
+                if processed_files % 10 == 0: self._save_processing_cache(excel_data, file_path, save_path,
+                                                                          save_detect_image, output_excel, copy_img,
+                                                                          use_fp16, processed_files, total_files)
                 try:
                     del img_path, image_info, img, species_info, detect_results
                 except NameError:
@@ -610,38 +620,38 @@ class ObjectDetectionGUI:
                 gc.collect()
 
             if not stopped_manually:
-                self.master.after(0, lambda: self.start_page.progress_frame.update_progress(
-                    value=total_files, total=total_files, speed=0, remaining_time="已完成"))
+                if self.master.winfo_exists():
+                    self.master.after(0, lambda: self.start_page.progress_frame.update_progress(value=total_files,
+                                                                                                total=total_files,
+                                                                                                speed=0,
+                                                                                                remaining_time="已完成"))
                 self.excel_data = excel_data
                 excel_data = DataProcessor.process_independent_detection(excel_data)
-                if earliest_date:
-                    excel_data = DataProcessor.calculate_working_days(excel_data, earliest_date)
-                if excel_data and output_excel:
-                    self._export_and_open_excel(excel_data, save_path)
+                if earliest_date: excel_data = DataProcessor.calculate_working_days(excel_data, earliest_date)
+                if excel_data and output_excel: self._export_and_open_excel(excel_data, save_path)
                 self._delete_processing_cache()
-                self.status_bar.status_label.config(text="处理完成！")
+                if self.master.winfo_exists(): self.status_bar.status_label.config(text="处理完成！")
                 messagebox.showinfo("成功", "图像处理完成！")
         except Exception as e:
             logger.error(f"处理过程中发生错误: {e}")
             messagebox.showerror("错误", f"处理过程中发生错误: {e}")
         finally:
-            self._set_processing_state(False)
+            if self.master.winfo_exists():
+                self._set_processing_state(False)
             gc.collect()
 
     def _set_processing_state(self, is_processing: bool):
         self.is_processing = is_processing
         self.start_page.set_processing_state(is_processing)
         self.sidebar.set_processing_state(is_processing)
-
         if is_processing:
             self.preview_page.show_detection_var.set(True)
             self.processing_stop_flag.clear()
         else:
             if self.processing_stop_flag.is_set():
-                self.status_bar.status_label.config(text="处理已停止")
-            else:
-                if self.status_bar.status_label.cget("text") != "处理完成！":
-                    self.status_bar.status_label.config(text="就绪")
+                if self.master.winfo_exists(): self.status_bar.status_label.config(text="处理已停止")
+            elif self.master.winfo_exists() and self.status_bar.status_label.cget("text") != "处理完成！":
+                self.status_bar.status_label.config(text="就绪")
 
     def _validate_inputs(self, file_path: str, save_path: str) -> bool:
         if not file_path or not os.path.isdir(file_path):
@@ -673,29 +683,17 @@ class ObjectDetectionGUI:
     def _save_processing_cache(self, excel_data, file_path, save_path, save_detect_image, output_excel, copy_img,
                                use_fp16, processed_files, total_files):
         def make_serializable(obj):
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            if isinstance(obj, dict):
-                return {k: make_serializable(v) for k, v in obj.items() if k != 'detect_results'}
-            if isinstance(obj, list):
-                return [make_serializable(i) for i in obj]
-            if type(obj).__module__ != 'builtins':
-                return None
+            if isinstance(obj, datetime): return obj.isoformat()
+            if isinstance(obj, dict): return {k: make_serializable(v) for k, v in obj.items() if k != 'detect_results'}
+            if isinstance(obj, list): return [make_serializable(i) for i in obj]
+            if hasattr(obj, '__dict__'): return None
             return obj
 
         serializable_excel_data = make_serializable(excel_data)
-
-        cache_data = {
-            'file_path': file_path,
-            'save_path': save_path,
-            'save_detect_image': save_detect_image,
-            'output_excel': output_excel,
-            'copy_img': copy_img,
-            'use_fp16': use_fp16,
-            'processed_files': processed_files,
-            'total_files': total_files,
-            'excel_data': serializable_excel_data,
-        }
+        cache_data = {'file_path': file_path, 'save_path': save_path, 'save_detect_image': save_detect_image,
+                      'output_excel': output_excel, 'copy_img': copy_img, 'use_fp16': use_fp16,
+                      'processed_files': processed_files, 'total_files': total_files,
+                      'excel_data': serializable_excel_data}
         cache_file = os.path.join(self.settings_manager.settings_dir, "cache.json")
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:
@@ -705,8 +703,7 @@ class ObjectDetectionGUI:
 
     def _delete_processing_cache(self):
         cache_file = os.path.join(self.settings_manager.settings_dir, "cache.json")
-        if os.path.exists(cache_file):
-            os.remove(cache_file)
+        if os.path.exists(cache_file): os.remove(cache_file)
 
     def _load_cache_data_from_file(self, cache_data):
         self._load_settings_to_ui(cache_data)
@@ -721,51 +718,3 @@ class ObjectDetectionGUI:
     def _resume_processing(self):
         self._load_cache_data_from_file(self.cache_data)
         self.start_processing(resume_from=self.cache_data.get('processed_files', 0))
-
-    def _check_for_updates(self, silent=False):
-        update_thread = threading.Thread(
-            target=check_for_updates,
-            args=(self.master, silent),
-            daemon=True
-        )
-        update_thread.start()
-
-    def show_params_help(self):
-        help_text = """
-        **检测阈值设置**
-        - **IOU阈值:** 控制对象检测中非极大值抑制（NMS）的重叠阈值。较高的值会减少重叠框，但可能导致部分目标漏检。
-        - **置信度阈值:** 检测对象的最小置信度分数。较高的值只显示高置信度的检测结果，减少误检。
-
-        **模型加速选项**
-        - **使用FP16加速:** 使用半精度浮点数进行推理，可以加快速度但可能会略微降低精度。需要兼容的NVIDIA GPU。
-
-        **高级检测选项**
-        - **使用数据增强:** 在测试时使用数据增强（TTA），通过对输入图像进行多种变换并综合结果，可能会提高准确性，但会显著降低处理速度。
-        - **使用类别无关NMS:** 在所有类别上一起执行NMS，对于检测多种相互重叠的物种可能有用。
-        """
-        messagebox.showinfo("参数说明", help_text)
-
-    def get_temp_photo_dir(self, update=False):
-        """Generates and updates the unique temporary directory path based on the project root."""
-        source_path = self.start_page.file_path_entry.get()
-        if not source_path:
-            return None
-
-        path_hash = hashlib.md5(source_path.encode()).hexdigest()
-        base_dir = self.settings_manager.base_dir
-        temp_dir = os.path.join(base_dir, "temp", "photo", path_hash)
-
-        if update:
-            self.current_temp_photo_dir = temp_dir
-
-        os.makedirs(temp_dir, exist_ok=True)
-        return temp_dir
-
-    def clean_temp_photo_directory(self, directory_to_clean):
-        """Clears the specified temporary directory."""
-        if directory_to_clean and os.path.exists(directory_to_clean):
-            logger.info(f"Cleaning temporary directory: {directory_to_clean}")
-            try:
-                shutil.rmtree(directory_to_clean)
-            except OSError as e:
-                logger.error(f"Error removing directory {directory_to_clean}: {e}")

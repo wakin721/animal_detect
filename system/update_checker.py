@@ -1,3 +1,5 @@
+# system/update_checker.py
+
 import requests
 import re
 import os
@@ -14,7 +16,6 @@ from system.config import APP_VERSION
 # GitHub仓库信息
 GITHUB_USER = "wakin721"
 GITHUB_REPO = "animal_detect"
-SOURCE_ZIP_URL = f"https://github.com/{GITHUB_USER}/{GITHUB_REPO}/archive/refs/heads/main.zip"
 
 
 def get_icon_path():
@@ -39,10 +40,12 @@ def parse_version(version_string):
         main_version = version_string
         prerelease = 'release'
 
-    version_parts = list(map(int, main_version.split('.')))
-    prerelease_value = prerelease_priority.get(prerelease.lower(), 0)
-
-    return tuple(version_parts + [prerelease_value])
+    try:
+        version_parts = list(map(int, main_version.split('.')))
+        prerelease_value = prerelease_priority.get(prerelease.lower(), 0)
+        return tuple(version_parts + [prerelease_value])
+    except ValueError:
+        return (0,)
 
 
 def compare_versions(current_version, remote_version):
@@ -57,64 +60,77 @@ def get_latest_version_info(channel='stable'):
     通过GitHub API获取最新的版本信息。
     channel: 'stable' 获取最新的正式版, 'preview' 获取最新的版本(包括预发布版)。
     """
+    api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases"
     headers = {"Accept": "application/vnd.github.v3+json"}
-    try:
-        if channel == 'stable':
-            api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest"
-            response = requests.get(api_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if data.get('prerelease', False):  # 如果 "latest" 是预发布版，则需要遍历查找最新的稳定版
-                all_releases_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases"
-                all_response = requests.get(all_releases_url, headers=headers, timeout=10)
-                all_response.raise_for_status()
-                for release in all_response.json():
-                    if not release.get('prerelease', False):
-                        data = release
-                        break
-        else:  # 'preview'
-            api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases"
-            response = requests.get(api_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            releases = response.json()
-            if not releases: return None
-            data = releases[0]  # API默认按创建日期降序排序
 
+    try:
+        response = requests.get(api_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        releases = response.json()
+        if not releases:
+            return None
+
+        latest_release = None
+        if channel == 'stable':
+            for release in releases:
+                if not release.get('prerelease') and not release.get('draft'):
+                    latest_release = release
+                    break
+        else:  # channel == 'preview'
+            for release in releases:
+                if not release.get('draft'):
+                    latest_release = release
+                    break
+
+        if not latest_release:
+            return None
+
+        tag_name = latest_release.get('tag_name', 'v0.0.0')
         return {
-            'version': data['tag_name'].lstrip('v'),
-            'notes': data.get('body', '无更新说明。'),
-            'url': data['zipball_url']
+            'version': tag_name.lstrip('v'),
+            'notes': latest_release.get('body', '无更新说明。'),
+            'url': latest_release.get('zipball_url')
         }
+
     except requests.RequestException as e:
         print(f"从GitHub获取版本信息失败: {e}")
         return None
 
 
-def check_for_updates(parent, silent=False):
-    """在后台线程中检查是否有新版本（静默启动时使用）。"""
+def check_for_updates(parent, silent=False, channel='preview'):
+    """
+    在后台线程中检查是否有新版本。
+    此函数由主窗口在启动时调用。
+    """
     try:
-        latest_info = get_latest_version_info(channel='preview')
+        latest_info = get_latest_version_info(channel=channel)
         if not latest_info:
-            if not silent:
+            if not silent and parent.winfo_exists():
                 _show_messagebox(parent, "更新错误", "无法在远程仓库中找到版本信息。", "error")
             return
 
         remote_version = latest_info['version']
+
         if compare_versions(APP_VERSION, remote_version):
-            if hasattr(parent, 'show_update_notification'):
-                parent.after(0, parent.show_update_notification)
-            update_message = f"新版本 ({remote_version}) 可用，是否前往高级设置进行更新？"
-            parent.after(0, lambda: messagebox.showinfo("发现新版本", update_message, parent=parent))
+            # 只有在找到更新时才与UI交互
+            if parent.winfo_exists():
+                # 安全地调用主窗口的方法来更新侧边栏
+                parent.after(0, parent.show_update_notification_on_sidebar)
+
+            # 非静默模式下弹窗提示
+            if not silent and parent.winfo_exists():
+                update_message = f"新版本 ({remote_version}) 可用，是否前往高级设置进行更新？"
+                _show_messagebox(parent, "发现新版本", update_message, "info")
 
     except Exception as e:
-        if not silent:
+        if not silent and parent.winfo_exists():
             _show_messagebox(parent, "更新错误", f"检查更新失败: {e}", "error")
 
 
 def start_download_thread(parent, download_url):
     """启动下载更新的线程。"""
     if not download_url:
-        messagebox.showerror("错误", "下载链接无效！", parent=parent)
+        _show_messagebox(parent, "错误", "下载链接无效！", "error")
         return
     download_thread = threading.Thread(target=download_and_install_update, args=(parent, download_url), daemon=True)
     download_thread.start()
@@ -123,7 +139,6 @@ def start_download_thread(parent, download_url):
 def download_and_install_update(parent, download_url):
     """创建带进度条的更新窗口。"""
 
-    # 此函数在自己的线程中运行, 所有UI操作都需要通过 parent.after() 调度
     def create_progress_window():
         global progress_window, label, progress_bar
         progress_window = tk.Toplevel(parent)
@@ -151,26 +166,28 @@ def download_and_install_update(parent, download_url):
 
         threading.Thread(target=perform_download, args=(parent, download_url), daemon=True).start()
 
-    parent.after(0, create_progress_window)
+    if parent.winfo_exists():
+        parent.after(0, create_progress_window)
 
 
 def perform_download(parent_window, download_url):
     """执行下载、解压、安装和重启的完整流程。"""
 
     def update_ui(text=None, p_value=None, p_mode=None, start=False, stop=False):
-        if text: label.config(text=text)
-        if p_value is not None: progress_bar['value'] = p_value
-        if p_mode: progress_bar['mode'] = p_mode
-        if start: progress_bar.start(10)
-        if stop: progress_bar.stop()
-        progress_window.update_idletasks()
+        if 'progress_window' in globals() and progress_window.winfo_exists():
+            if text: label.config(text=text)
+            if p_value is not None: progress_bar['value'] = p_value
+            if p_mode: progress_bar['mode'] = p_mode
+            if start: progress_bar.start(10)
+            if stop: progress_bar.stop()
+            progress_window.update_idletasks()
 
     try:
         parent_window.after(0, lambda: update_ui(text="正在从GitHub下载更新..."))
         response = requests.get(download_url, stream=True, timeout=30)
         response.raise_for_status()
         total_size = int(response.headers.get('content-length', 0))
-        parent_window.after(0, lambda: progress_bar.config(maximum=total_size))
+        parent_window.after(0, lambda: progress_bar.config(maximum=total_size if total_size > 0 else 100))
 
         downloaded_size = 0
         file_buffer = io.BytesIO()
@@ -179,10 +196,16 @@ def perform_download(parent_window, download_url):
             if chunk:
                 file_buffer.write(chunk)
                 downloaded_size += len(chunk)
-                parent_window.after(0, lambda v=downloaded_size: update_ui(p_value=v))
+                if total_size > 0:
+                    parent_window.after(0, lambda v=downloaded_size: update_ui(p_value=v))
 
         parent_window.after(0, lambda: update_ui(text="下载完成，正在解压并安装...", p_mode='indeterminate', start=True))
-        app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        if getattr(sys, 'frozen', False):
+            app_root = os.path.dirname(sys.executable)
+        else:
+            app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
         file_buffer.seek(0)
 
         with zipfile.ZipFile(file_buffer) as z:
@@ -200,22 +223,27 @@ def perform_download(parent_window, download_url):
                         shutil.copyfileobj(source, target)
 
         parent_window.after(0, lambda: update_ui(stop=True))
-        parent_window.after(0, progress_window.destroy)
+        parent_window.after(0,
+                            lambda: progress_window.destroy() if 'progress_window' in globals() and progress_window.winfo_exists() else None)
 
         def ask_restart():
             if messagebox.askyesno("更新成功", "程序已成功更新！\n是否立即重启应用程序以应用更改？",
                                    parent=parent_window):
-                python = sys.executable
-                if os.name == 'nt' and python.endswith('pythonw.exe'):
-                    python = os.path.join(os.path.dirname(python), 'python.exe')
-                main_script = os.path.abspath(sys.argv[0])
-                subprocess.Popen([python, main_script])
+                if getattr(sys, 'frozen', False):
+                    main_script_path = sys.executable
+                    args = [main_script_path]
+                else:
+                    main_script_path = os.path.join(app_root, 'main.py')
+                    args = [sys.executable, main_script_path]
+                subprocess.Popen(args)
                 parent_window.destroy()
+                sys.exit()
 
         parent_window.after(0, ask_restart)
 
     except Exception as e:
-        parent_window.after(0, progress_window.destroy)
+        parent_window.after(0,
+                            lambda: progress_window.destroy() if 'progress_window' in globals() and progress_window.winfo_exists() else None)
         _show_messagebox(parent_window, "更新失败", f"更新过程中发生错误: {e}", "error")
 
 
@@ -223,13 +251,17 @@ def _show_messagebox(parent, title, message, msg_type):
     """内部辅助函数，确保在主线程中调用messagebox。"""
 
     def show_message():
-        # 创建一个临时的Toplevel窗口以使其居中于父窗口
+        if not parent.winfo_exists(): return
         transient_parent = tk.Toplevel(parent)
-        transient_parent.withdraw()  # 隐藏临时窗口
+        transient_parent.withdraw()
         if msg_type == "info":
             messagebox.showinfo(title, message, parent=transient_parent)
         elif msg_type == "error":
             messagebox.showerror(title, message, parent=transient_parent)
-        transient_parent.destroy()
+        elif msg_type == "askyesno":
+            messagebox.askyesno(title, message, parent=transient_parent)
+        if transient_parent.winfo_exists():
+            transient_parent.destroy()
 
-    parent.after(0, show_message)
+    if parent.winfo_exists():
+        parent.after(0, show_message)

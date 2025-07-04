@@ -7,8 +7,10 @@ from system.config import APP_VERSION
 from system.utils import resource_path
 from system.gui.ui_components import RoundedButton
 
+
 class Sidebar(ttk.Frame):
     """侧边栏导航"""
+
     def __init__(self, parent, controller, **kwargs):
         super().__init__(parent, style="Sidebar.TFrame", width=180, **kwargs)
         self.controller = controller
@@ -26,15 +28,20 @@ class Sidebar(ttk.Frame):
             ttk.Label(logo_frame, image=self.logo_photo, background=self.controller.sidebar_bg).pack(pady=(0, 5))
         except Exception:
             pass
+
         ttk.Label(
             logo_frame, text="动物检测系统", font=("Segoe UI", 12, "bold"),
             foreground=self.controller.sidebar_fg, background=self.controller.sidebar_bg
         ).pack()
+
+        # 使用StringVar来确保UI更新
+        self.update_notification_text = tk.StringVar()
         self.update_notification_label = ttk.Label(
-            logo_frame, text="", font=("Segoe UI", 9, "bold"),
-            foreground="yellow", background=self.controller.sidebar_bg
+            logo_frame, textvariable=self.update_notification_text, font=("Segoe UI", 9, "bold"),
+            foreground="#FFFF00",  # 使用明确的亮黄色
+            background=self.controller.sidebar_bg
         )
-        self.update_notification_label.pack(pady=(5,0))
+        self.update_notification_label.pack(pady=(5, 0))
 
         ttk.Separator(self, orient="horizontal").pack(fill="x", padx=15, pady=10)
 
@@ -77,14 +84,16 @@ class Sidebar(ttk.Frame):
                 button.configure(state="disabled" if is_processing else "normal")
 
     def show_update_notification(self, message="发现新版本"):
-        self.update_notification_label.config(text=message)
+        # 通过StringVar更新文本，这是Tkinter中最可靠的文本更新方式
+        self.update_notification_text.set(message)
 
     def update_theme(self):
         self.configure(style="Sidebar.TFrame")
+        self.update_notification_label.configure(background=self.controller.sidebar_bg)
         for widget in self.winfo_children():
-            if isinstance(widget, ttk.Frame) or isinstance(widget, tk.Frame):
+            if isinstance(widget, (ttk.Frame, tk.Frame)):
                 widget.configure(bg=self.controller.sidebar_bg)
                 for sub_widget in widget.winfo_children():
-                     if isinstance(sub_widget, (ttk.Label, tk.Label)):
+                    if isinstance(sub_widget, (ttk.Label, tk.Label)):
                         sub_widget.configure(background=self.controller.sidebar_bg)
         self.set_active_button(self.controller.current_page)

@@ -300,10 +300,6 @@ def main():
         cache_data=cache_data
         )
 
-    # Startup update check
-    update_thread = threading.Thread(target=lambda: check_for_updates(root, silent=True), daemon=True)
-    update_thread.start()
-
     # 启动主循环
     root.mainloop()
 
