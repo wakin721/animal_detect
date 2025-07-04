@@ -10,6 +10,7 @@ import sys
 
 from system.gui.ui_components import CollapsiblePanel
 from system.utils import resource_path
+from system.config import APP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,124 @@ class AdvancedPage(ttk.Frame):
         self.env_maintenance_tab = ttk.Frame(self.advanced_notebook)
         self.advanced_notebook.add(self.env_maintenance_tab, text="环境维护")
 
+        self.software_settings_tab = ttk.Frame(self.advanced_notebook)
+        self.advanced_notebook.add(self.software_settings_tab, text="软件设置")
+
         self.advanced_notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._create_model_params_content()
         self._create_env_maintenance_content()
+        self._create_software_settings_content()
+
+    def _create_software_settings_content(self) -> None:
+        """创建软件设置标签页内容"""
+        main_frame = ttk.Frame(self.software_settings_tab)
+        main_frame.pack(fill="both", expand=True)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=1)
+
+        style = ttk.Style()
+        bg_color = style.lookup('TFrame', 'background') or 'SystemButtonFace'
+        self.software_canvas = tk.Canvas(main_frame, bg=bg_color, highlightthickness=0)
+        self.software_scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=self.software_canvas.yview)
+        self.software_canvas.configure(yscrollcommand=self.software_scrollbar.set)
+        self.software_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.software_canvas.grid(row=0, column=0, sticky="nsew")
+        self.software_content_frame = ttk.Frame(self.software_canvas)
+        self.software_canvas_window = self.software_canvas.create_window(
+            (0, 0), window=self.software_content_frame, anchor="nw"
+        )
+
+        # --- 新增：缓存管理面板 ---
+        self.cache_panel = CollapsiblePanel(
+            self.software_content_frame,
+            "缓存管理",
+            subtitle="清除应用程序生成的临时文件",
+            icon="🗑️"
+        )
+        self.cache_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        cache_action_frame = ttk.Frame(self.cache_panel.content_padding)
+        cache_action_frame.pack(fill="x", pady=5)
+
+        ttk.Label(cache_action_frame, text="清除处理过程中生成的图片预览和数据缓存。").pack(anchor="w", pady=(0, 10))
+
+        clear_cache_button = ttk.Button(
+            cache_action_frame,
+            text="清除图片缓存",
+            command=self.controller.clear_image_cache,  # 指向新的controller方法
+            style="Action.TButton"
+        )
+        clear_cache_button.pack(anchor="e", pady=5)
+
+        # --- 更新面板 ---
+        self.update_panel = CollapsiblePanel(
+            self.software_content_frame,
+            "软件更新",
+            subtitle="检查、更新和管理软件版本",
+            icon="🔄"
+        )
+        self.update_panel.pack(fill="x", expand=False, pady=(0, 1))
+
+        # --- 更新面板内容 ---
+        channel_frame = ttk.Frame(self.update_panel.content_padding)
+        channel_frame.pack(fill="x", pady=5)
+        ttk.Label(channel_frame, text="选择更新通道").pack(side="top", anchor="w", pady=(0, 5))
+
+        self.controller.update_channel_var = tk.StringVar(value="稳定版 (Release)")
+        channel_combo = ttk.Combobox(
+            channel_frame,
+            textvariable=self.controller.update_channel_var,
+            values=["稳定版 (Release)", "预览版 (Preview)"],
+            state="readonly"
+        )
+        channel_combo.pack(fill="x", expand=True)
+
+        update_action_frame = ttk.Frame(self.update_panel.content_padding)
+        update_action_frame.pack(fill="x", pady=(10, 5), expand=True)
+
+        self.update_status_label = ttk.Label(update_action_frame, text=f"当前版本: {APP_VERSION}")
+        self.update_status_label.pack(side="left", anchor='w')
+
+        self.check_update_button = ttk.Button(
+            update_action_frame,
+            text="检查更新",
+            command=self.controller.check_for_updates_from_ui,
+            style="Action.TButton"
+        )
+        self.check_update_button.pack(side="right")
+
+        self._configure_software_scrolling()
+        self.master.after(100, lambda: self.software_canvas.yview_moveto(0.0))
+
+    def _configure_software_scrolling(self):
+        """配置软件设置页面的滚动"""
+
+        def _update_scrollregion(event=None):
+            self.software_canvas.configure(scrollregion=self.software_canvas.bbox("all"))
+
+        def _configure_canvas(event):
+            canvas_width = event.width
+            if self.software_canvas.winfo_exists() and self.software_canvas_window:
+                self.software_canvas.itemconfigure(self.software_canvas_window, width=canvas_width)
+
+        def _on_mousewheel(event):
+            if platform.system() == "Windows":
+                self.software_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            else:
+                self.software_canvas.yview_scroll(int(event.delta), "units")
+
+        self.software_canvas.bind("<MouseWheel>", _on_mousewheel)
+        self.software_content_frame.bind("<Configure>", _update_scrollregion)
+        self.software_canvas.bind("<Configure>", _configure_canvas)
+
+    def _on_tab_changed(self, event):
+        current_tab = self.advanced_notebook.select()
+        tab_text = self.advanced_notebook.tab(current_tab, "text")
+        if tab_text == "环境维护" and hasattr(self, 'env_canvas'):
+            self.master.after(10, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
+        elif tab_text == "软件设置" and hasattr(self, 'software_canvas'):
+            self.master.after(10, lambda: self.software_canvas.configure(scrollregion=self.software_canvas.bbox("all")))
 
     def _create_model_params_content(self) -> None:
         """创建模型参数设置内容"""
@@ -474,9 +589,6 @@ class AdvancedPage(ttk.Frame):
         except Exception as e:
             self.pytorch_status_var.set(f"检查失败: {str(e)}")
 
-    # V V V V V V V V V V V V V V V V V V V V
-    # MODIFICATION: Refined installation logic for auto-closing terminal and restart prompt.
-    # V V V V V V V V V V V V V V V V V V V V
     def _ask_for_restart(self, title="操作完成"):
         """弹窗询问用户是否重启应用"""
         if messagebox.askyesno(title, "操作已完成，建议重启软件以应用所有更改。\n是否立即重启？"):
@@ -498,51 +610,144 @@ class AdvancedPage(ttk.Frame):
         def installation_thread():
             try:
                 python_executable = sys.executable
-                # 强制使用 python.exe 以确保终端窗口弹出
+
+                # 确保使用正确的python可执行文件
                 if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
                     console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
                     if os.path.exists(console_executable):
                         python_executable = console_executable
 
-                # 构造安装命令字符串
-                # 关键修正：在这里加上 -m
-                install_cmd_list = [f'"{python_executable}"', '-m'] + command_args
-                install_cmd = " ".join(install_cmd_list)
-
-                # 构造一个完整的 shell 命令
-                # 在安装成功后，会打印成功信息并执行一个5秒的倒计时
-                if platform.system() == "Windows":
-                    # 使用 '&&' 来确保只有在安装成功时才执行后续命令
-                    # 使用 'echo.' 打印空行以获得更好的格式
-                    # 使用 'timeout' 来实现倒计时，'/nobreak' 防止用户跳过
-                    countdown_cmd = 'echo. && echo Installation successful. This window will close in 5 seconds... && timeout /t 5 /nobreak'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
-                else:  # for Linux/macOS
-                    countdown_cmd = 'echo "" && echo "Installation successful. This window will close in 5 seconds..." && sleep 5'
-                    final_command = f'{install_cmd} && {countdown_cmd}'
-
                 self.master.after(0, lambda: status_var.set("安装已启动..."))
 
-                # 使用 shell=True 来执行我们构造的包含 '&&' 的复合命令
-                # 这会弹出一个新的命令行窗口
-                process = subprocess.Popen(final_command, shell=True)
-                process.communicate()  # 等待整个过程（包括倒计时）结束
+                if platform.system() == "Windows":
+                    # 在Windows上，创建一个cmd命令来在新窗口中运行pip
+                    # 使用cmd /c 来执行命令并自动关闭窗口
+                    cmd_parts = []
+                    cmd_parts.append(f'"{python_executable}"')
+                    cmd_parts.extend(command_args)
 
-                if process.returncode == 0:
-                    self.master.after(0, lambda: status_var.set("安装成功！"))
-                    self.master.after(100, lambda: self._ask_for_restart(success_title))
-                else:
-                    # 如果安装失败, '&&' 会阻止倒计时命令的执行
-                    # 命令行窗口会停留在错误信息界面，等待用户手动关闭
-                    error_message = f"安装失败 (返回码: {process.returncode})。\n请查看命令行窗口获取详细错误信息。"
-                    logger.error(error_message)
-                    self.master.after(0, lambda: status_var.set("安装失败"))
-                    messagebox.showerror("安装错误", error_message)
+                    # 构建完整的cmd命令
+                    pip_command = " ".join(cmd_parts)
+
+                    # 创建一个批处理命令，成功后暂停5秒再关闭
+                    batch_cmd = f'''
+@echo off
+echo Starting installation...
+echo.
+{pip_command}
+if %ERRORLEVEL% EQU 0 (
+    echo.
+    echo Installation completed successfully!
+    echo This window will close in 5 seconds...
+    timeout /t 5 /nobreak > nul
+) else (
+    echo.
+    echo Installation failed with error code %ERRORLEVEL%
+    echo Please check the error messages above.
+    echo Press any key to close this window...
+    pause > nul
+)
+'''
+
+                    # 写入临时批处理文件
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.bat', delete=False) as f:
+                        f.write(batch_cmd)
+                        batch_file = f.name
+
+                    try:
+                        # 在新的cmd窗口中运行批处理文件
+                        process = subprocess.Popen(['cmd', '/c', 'start', 'cmd', '/c', batch_file],
+                                                 shell=False,
+                                                 creationflags=subprocess.CREATE_NEW_CONSOLE)
+                        process.wait()  # 等待窗口关闭
+
+                        # 检查安装是否成功（这里简单假设如果没有异常就是成功）
+                        self.master.after(0, lambda: status_var.set("安装完成"))
+                        self.master.after(100, lambda: self._ask_for_restart(success_title))
+
+                    finally:
+                        # 清理临时文件
+                        try:
+                            os.unlink(batch_file)
+                        except:
+                            pass
+
+                else:  # Linux/macOS
+                    # 对于Unix系统，使用终端窗口
+                    cmd_parts = [python_executable]
+                    cmd_parts.extend(command_args)
+
+                    # 构建shell脚本
+                    shell_script = f'''#!/bin/bash
+echo "Starting installation..."
+echo ""
+{" ".join(cmd_parts)}
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "Installation completed successfully!"
+    echo "This window will close in 5 seconds..."
+    sleep 5
+else
+    echo ""
+    echo "Installation failed"
+    echo "Press Enter to close this window..."
+    read
+fi
+'''
+
+                    # 写入临时脚本文件
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
+                        f.write(shell_script)
+                        script_file = f.name
+
+                    try:
+                        os.chmod(script_file, 0o755)
+
+                        # 尝试不同的终端模拟器
+                        terminal_commands = [
+                            ['gnome-terminal', '--', 'bash', script_file],
+                            ['konsole', '-e', 'bash', script_file],
+                            ['xterm', '-e', 'bash', script_file],
+                            ['terminal', '-e', 'bash', script_file]  # macOS
+                        ]
+
+                        process_started = False
+                        for cmd in terminal_commands:
+                            try:
+                                process = subprocess.Popen(cmd)
+                                process_started = True
+                                break
+                            except FileNotFoundError:
+                                continue
+
+                        if process_started:
+                            self.master.after(0, lambda: status_var.set("安装完成"))
+                            self.master.after(100, lambda: self._ask_for_restart(success_title))
+                        else:
+                            # 如果没有找到终端，回退到静默安装
+                            process = subprocess.run(cmd_parts, capture_output=True, text=True)
+                            if process.returncode == 0:
+                                self.master.after(0, lambda: status_var.set("安装成功！"))
+                                self.master.after(100, lambda: self._ask_for_restart(success_title))
+                            else:
+                                error_msg = f"安装失败: {process.stderr}"
+                                self.master.after(0, lambda: status_var.set("安装失败"))
+                                self.master.after(0, lambda: messagebox.showerror("安装错误", error_msg))
+
+                    finally:
+                        # 清理临时文件
+                        try:
+                            os.unlink(script_file)
+                        except:
+                            pass
 
             except Exception as e:
                 error_msg = f"执行安装命令时出错: {e}"
                 logger.error(error_msg)
                 self.master.after(0, lambda: status_var.set(f"启动失败: {e}"))
+                self.master.after(0, lambda: messagebox.showerror("错误", error_msg))
             finally:
                 self.master.after(0, lambda: self.install_button.configure(state="normal"))
                 if hasattr(self, 'install_package_btn'):
@@ -574,12 +779,12 @@ class AdvancedPage(ttk.Frame):
             self.install_button.configure(state="normal")
             return
 
-        command_args = ["pip", "install", "--upgrade"]
+        command_args = ["-m", "pip", "install", "--upgrade"]
         if self.force_reinstall_var.get():
             command_args.append("--force-reinstall")
         command_args.extend([f"torch=={pytorch_version}", "torchvision", "torchaudio"])
         if cuda_version:
-            cuda_str_map = {"11.8": "cu118", "12.1": "cu121"}
+            cuda_str_map = {"11.8": "cu118", "12.1": "cu121", "12.6": "cu126", "12.8": "cu128"}
             cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
             command_args.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_str}"])
         else:
@@ -602,10 +807,8 @@ class AdvancedPage(ttk.Frame):
         self.package_status_var.set("正在准备安装...")
         self.master.update_idletasks()
 
-        command_args = ["pip", "install", "--upgrade", package_spec]
+        command_args = ["-m", "pip", "install", "--upgrade", package_spec]
         self._run_install_in_terminal(command_args, self.package_status_var, f"安装 {package_spec} 完成")
-
-    # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
 
     def _refresh_model_list(self):
         res_dir = resource_path("res")

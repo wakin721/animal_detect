@@ -19,7 +19,8 @@ from system.image_processor import ImageProcessor
 from system.metadata_extractor import ImageMetadataExtractor
 from system.data_processor import DataProcessor
 from system.settings_manager import SettingsManager
-from system.update_checker import check_for_updates
+# 重点：导入新的和修改后的函数
+from system.update_checker import check_for_updates, get_latest_version_info, compare_versions, start_download_thread
 
 # Import GUI components
 from system.gui.sidebar import Sidebar
@@ -54,6 +55,9 @@ class ObjectDetectionGUI:
         self.excel_data = []
         self.current_page = "settings"
 
+        # 为更新通道添加变量
+        self.update_channel_var = tk.StringVar(value="稳定版 (Release)")
+
         self._apply_system_theme()
         self._setup_window()
         self._initialize_model()
@@ -76,6 +80,73 @@ class ObjectDetectionGUI:
         self.setup_theme_monitoring()
         if hasattr(self, 'preview_page'):
             self.preview_page._load_validation_data()
+
+    def clear_image_cache(self):
+        """确认并清除整个图片缓存目录 (temp/photo)"""
+        cache_dir = os.path.join(self.settings_manager.base_dir, "temp", "photo")
+
+        if messagebox.askyesno("确认清除缓存",
+                               f"是否清空图片缓存？\n\n此操作将删除以下文件夹内的所有内容：\n{cache_dir}\n\n注意：这不会影响您的原始图片或已保存的结果。",
+                               parent=self.master):
+            if os.path.exists(cache_dir):
+                try:
+                    shutil.rmtree(cache_dir)
+                    os.makedirs(cache_dir, exist_ok=True)
+                    messagebox.showinfo("成功", "图片缓存已成功清除。", parent=self.master)
+                except Exception as e:
+                    messagebox.showerror("错误", f"清除缓存时发生错误：\n{e}", parent=self.master)
+            else:
+                messagebox.showinfo("提示", "缓存目录不存在，请尝试选择文件目录以生成缓存目录。", parent=self.master)
+
+    def _check_for_updates(self, silent=False):
+        """静默检查更新（程序启动时）"""
+        update_thread = threading.Thread(
+            target=check_for_updates,
+            args=(self.master, silent),
+            daemon=True
+        )
+        update_thread.start()
+
+    def check_for_updates_from_ui(self):
+        """从高级设置UI触发的更新检查"""
+        channel_selection = self.update_channel_var.get()
+        channel = 'preview' if '预览版' in channel_selection else 'stable'
+
+        button = self.advanced_page.check_update_button
+        status_label = self.advanced_page.update_status_label
+
+        button.config(state="disabled")
+        status_label.config(text=f"正在检查 '{channel_selection}' ...")
+
+        threading.Thread(target=self._update_check_thread, args=(channel, status_label, button), daemon=True).start()
+
+    def _update_check_thread(self, channel, status_label, button):
+        """在后台线程中执行更新检查并更新UI"""
+        try:
+            latest_info = get_latest_version_info(channel)
+
+            if not latest_info:
+                self.master.after(0, lambda: status_label.config(text="检查失败，请重试。"))
+                messagebox.showerror("更新错误", "无法获取远程版本信息。", parent=self.master)
+                return
+
+            remote_version = latest_info['version']
+
+            if compare_versions(APP_VERSION, remote_version):
+                self.master.after(0, lambda: status_label.config(text=f"发现新版本: {remote_version}"))
+                update_message = f"发现新版本: {remote_version}\n\n{latest_info.get('notes', '')}\n\n是否立即下载并安装？"
+                if messagebox.askyesno("发现新版本", update_message, parent=self.master):
+                    start_download_thread(self.master, latest_info['url'])
+            else:
+                self.master.after(0, lambda: status_label.config(text=f"当前已是最新版本 ({APP_VERSION})"))
+                messagebox.showinfo("无更新", "您目前使用的是最新版本。", parent=self.master)
+
+        except Exception as e:
+            logger.error(f"UI检查更新失败: {e}")
+            self.master.after(0, lambda: status_label.config(text="检查更新时出错。"))
+            messagebox.showerror("更新错误", f"检查更新时发生错误: {e}", parent=self.master)
+        finally:
+            self.master.after(0, lambda: button.config(state="normal"))
 
     def _apply_system_theme(self):
         try:
