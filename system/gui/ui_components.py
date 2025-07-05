@@ -402,24 +402,16 @@ class SpeedProgressBar(ttk.Frame):
 class CollapsiblePanel(ttk.Frame):
     """现代化可折叠面板组件"""
 
-    def __init__(self, parent, title, subtitle="", icon=None, **kwargs):
+    def __init__(self, parent, controller, title, subtitle="", icon=None, **kwargs):
         super().__init__(parent, **kwargs)
         self.parent = parent
+        self.controller = controller
         self.toggle_callbacks = []
-        self.style = ttk.Style()
-        current_theme = self.style.theme_use()
-        self.is_dark_mode = 'dark' in current_theme
-        self.bg_color = "#2b2b2b" if self.is_dark_mode else "#f5f5f5"
-        self.header_bg = "#333333" if self.is_dark_mode else "#e5e5e5"
-        self.text_color = "#ffffff" if self.is_dark_mode else "#000000"
-        self.hover_color = "#3a3a3a" if self.is_dark_mode else "#e0e0e0"
+        self._initialize_colors()
 
         self.header_frame = tk.Frame(self, bg=self.header_bg, cursor="hand2")
         self.header_frame.pack(fill="x", expand=False, pady=(0, 1))
 
-        # V V V V V V V V V V V V V V V V V V V V
-        # MODIFICATION: Changed icon font
-        # V V V V V V V V V V V V V V V V V V V V
         self.icon_label = None
         if icon:
             try:
@@ -434,7 +426,6 @@ class CollapsiblePanel(ttk.Frame):
                 self.icon_label.pack(side="left", padx=(15, 10), pady=12)
             except Exception as e:
                 logger.error(f"Failed to load icon: {e}")
-        # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
 
         title_container = tk.Frame(self.header_frame, bg=self.header_bg)
         title_container.pack(side="left", fill="both", expand=True, pady=10)
@@ -460,6 +451,38 @@ class CollapsiblePanel(ttk.Frame):
         self.toggle_button.bind("<Button-1>", self.toggle)
         if self.icon_label:
             self.icon_label.bind("<Button-1>", self.toggle)
+
+    def _initialize_colors(self):
+        """根据当前主题初始化颜色变量"""
+        self.style = ttk.Style()
+        self.is_dark_mode = self.controller.is_dark_mode
+        self.bg_color = "#2b2b2b" if self.is_dark_mode else "#f5f5f5"
+        self.header_bg = "#333333" if self.is_dark_mode else "#e5e5e5"
+        self.text_color = "#ffffff" if self.is_dark_mode else "#000000"
+        self.hover_color = "#3a3a3a" if self.is_dark_mode else "#e0e0e0"
+
+    def update_theme(self):
+        """更新组件颜色以匹配新的主题"""
+        self.configure(style='TFrame')  # 强制面板本身应用新主题的样式
+        self._initialize_colors()
+
+        self.header_frame.config(bg=self.header_bg)
+        self.toggle_button.config(bg=self.header_bg, fg=self.text_color)
+
+        if self.icon_label:
+            self.icon_label.config(bg=self.header_bg, fg=self.text_color)
+
+        # 更新标题和副标题的容器及标签
+        title_container = self.title_label.master
+        title_container.config(bg=self.header_bg)
+        self.title_label.config(bg=self.header_bg, fg=self.text_color)
+        if hasattr(self, 'subtitle_label'):
+            self.subtitle_label.config(bg=self.header_bg, fg=self.text_color)
+
+        # 更新内容区域的样式
+        self.content_frame.configure(style="TFrame")
+        self.content_padding.configure(style="TFrame")
+
 
     def toggle(self, event=None):
         if self.is_expanded:

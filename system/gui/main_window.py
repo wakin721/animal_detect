@@ -168,7 +168,29 @@ class ObjectDetectionGUI:
             if self.master.winfo_exists() and button.winfo_exists():
                 self.master.after(0, lambda: button.config(state="normal"))
 
-    # --- 其他函数保持不变 ---
+    def change_theme(self):
+        """根据用户选择更改应用程序主题。"""
+        selected_theme = self.advanced_page.theme_var.get()
+
+        if selected_theme == "自动":
+            self._apply_system_theme()
+        elif selected_theme == "深色":
+            sv_ttk.set_theme("dark")
+            self.is_dark_mode = True
+        else:  # "浅色"
+            sv_ttk.set_theme("light")
+            self.is_dark_mode = False
+
+        # 使用 "after" 来延迟UI更新，确保sv_ttk有时间应用主题
+        self.master.after(50, self._finalize_theme_change)
+
+    def _finalize_theme_change(self):
+        """在主题设置后完成UI更新。"""
+        self._setup_styles()
+        self._update_ui_theme()
+        self._save_current_settings()
+
+
     def _apply_system_theme(self):
         try:
             import darkdetect
@@ -203,20 +225,25 @@ class ObjectDetectionGUI:
 
     def _check_theme_change(self):
         try:
-            import darkdetect
-            current_theme = darkdetect.theme().lower()
-            if (current_theme == 'dark' and not self.is_dark_mode) or \
-                    (current_theme == 'light' and self.is_dark_mode):
-                self._apply_system_theme()
-                self._setup_styles()
-                self._update_ui_theme()
+            if self.advanced_page.theme_var.get() == "自动":
+                import darkdetect
+                current_theme = darkdetect.theme().lower()
+                if (current_theme == 'dark' and not self.is_dark_mode) or \
+                        (current_theme == 'light' and self.is_dark_mode):
+                    self._apply_system_theme()
+                    # 延迟最终的样式和UI更新
+                    self.master.after(50, self._finalize_theme_change)
         except Exception as e:
             logger.warning(f"检查主题变化失败: {e}")
         self.master.after(10000, self._check_theme_change)
 
+
     def _update_ui_theme(self):
         self.sidebar.update_theme()
+        if hasattr(self, 'advanced_page') and hasattr(self.advanced_page, 'update_theme'):
+            self.advanced_page.update_theme()
         self._show_page(self.current_page)
+
 
     def _setup_window(self):
         self.master.title(APP_TITLE)
@@ -258,14 +285,15 @@ class ObjectDetectionGUI:
     def _create_ui_elements(self):
         self.master.columnconfigure(1, weight=1)
         self.master.rowconfigure(0, weight=1)
+
         self.sidebar = Sidebar(self.master, self)
         self.sidebar.grid(row=0, column=0, sticky="ns")
+
         self.content_frame = ttk.Frame(self.master)
         self.content_frame.grid(row=0, column=1, sticky="nsew")
         self.content_frame.columnconfigure(0, weight=1)
         self.content_frame.rowconfigure(0, weight=1)
 
-        # Reorder initialization to fix AttributeError
         self.start_page = StartPage(self.content_frame, self)
         self.advanced_page = AdvancedPage(self.content_frame, self)
         self.preview_page = PreviewPage(self.content_frame, self)
@@ -293,7 +321,15 @@ class ObjectDetectionGUI:
             self.sidebar_hover_bg = f"#{min(255, r + 30):02x}{min(255, g + 30):02x}{min(255, b + 30):02x}"
         except tk.TclError:
             self.sidebar_hover_bg = sidebar_bg
+
         style.configure("Sidebar.TFrame", background=sidebar_bg)
+        style.configure("Sidebar.TLabel", background=sidebar_bg, foreground=sidebar_fg)
+        style.configure("Sidebar.Version.TLabel", background=sidebar_bg, foreground=sidebar_fg, font=("Segoe UI", 8))
+        style.configure("Sidebar.Notification.TLabel", background=sidebar_bg, foreground="#FFFF00",
+                        font=("Segoe UI", 9, "bold"))
+        style.configure("Sidebar.Title.TLabel", background=sidebar_bg, foreground=sidebar_fg,
+                        font=("Segoe UI", 12, "bold"))
+
         style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"), padding=(0, 10, 0, 10))
         style.configure("Process.TButton", font=("Segoe UI", 11), padding=(10, 5))
 
@@ -368,7 +404,8 @@ class ObjectDetectionGUI:
                 "key_up": self.advanced_page.key_up_var.get(),
                 "key_down": self.advanced_page.key_down_var.get(),
                 "key_correct": self.advanced_page.key_correct_var.get(),
-                "key_incorrect": self.advanced_page.key_incorrect_var.get()}
+                "key_incorrect": self.advanced_page.key_incorrect_var.get(),
+                "theme": self.advanced_page.theme_var.get()}
 
     def _load_settings_to_ui(self, settings: dict):
         try:
@@ -398,6 +435,10 @@ class ObjectDetectionGUI:
             self.advanced_page.key_correct_var.set(settings.get("key_correct", "<Key-1>"))
             self.advanced_page.key_incorrect_var.set(settings.get("key_incorrect", "<Key-2>"))
             self.preview_page.rebind_keys()
+
+            # Load theme
+            self.advanced_page.theme_var.set(settings.get("theme", "自动"))
+            self.change_theme()
 
         except Exception as e:
             logger.error(f"加载设置到UI失败: {e}")

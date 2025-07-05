@@ -88,12 +88,38 @@ class Sidebar(ttk.Frame):
         self.update_notification_text.set(message)
 
     def update_theme(self):
+        # 1. Update the style definition. This is the proper way to style ttk widgets.
+        style = ttk.Style()
+        style.configure("Sidebar.TFrame", background=self.controller.sidebar_bg)
+
+        # 2. Apply the updated style to the main sidebar frame and its ttk children.
         self.configure(style="Sidebar.TFrame")
-        self.update_notification_label.configure(background=self.controller.sidebar_bg)
+
+        # 3. Manually update the background of specific widgets.
+        # This is necessary for standard tk widgets or complex custom widgets.
         for widget in self.winfo_children():
-            if isinstance(widget, (ttk.Frame, tk.Frame)):
+            # Update standard tk.Frame (used as a container for buttons)
+            if isinstance(widget, tk.Frame):
                 widget.configure(bg=self.controller.sidebar_bg)
+
+            # Update ttk.Labels directly.
+            elif isinstance(widget, ttk.Label):
+                widget.configure(background=self.controller.sidebar_bg)
+
+            # Update children of the ttk.Frame that holds the logo
+            elif isinstance(widget, ttk.Frame):
                 for sub_widget in widget.winfo_children():
-                    if isinstance(sub_widget, (ttk.Label, tk.Label)):
+                    if isinstance(sub_widget, ttk.Label):
                         sub_widget.configure(background=self.controller.sidebar_bg)
+
+        # 4. Update the custom RoundedButton widgets with their new colors.
+        for button in self.nav_buttons.values():
+            button.bg = self.controller.sidebar_bg
+            button.fg = self.controller.sidebar_fg
+            button.highlight_color = self.controller.highlight_color
+            button.parent_bg = self.controller.sidebar_bg
+            button.configure(bg=self.controller.sidebar_bg)  # Update the canvas background
+            button.set_active(button.active)  # Redraw the button with new colors
+
+        # 5. Re-set the active button to ensure highlighting is correct.
         self.set_active_button(self.controller.current_page)

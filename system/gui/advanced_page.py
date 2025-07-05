@@ -35,9 +35,32 @@ class AdvancedPage(ttk.Frame):
         self.key_correct_var = tk.StringVar(value='<Key-1>')
         self.key_incorrect_var = tk.StringVar(value='<Key-2>')
 
+        # Theme variable
+        self.theme_var = tk.StringVar(value="自动")
+
         self.cache_size_var = tk.StringVar(value="正在计算...")
 
         self._create_widgets()
+
+    def update_theme(self):
+        """更新此页面上所有自定义组件的主题"""
+        self.is_dark_mode = self.controller.is_dark_mode
+        # 更新所有可折叠面板
+        panels = [
+            self.threshold_panel, self.accel_panel, self.advanced_detect_panel,
+            self.pytorch_panel, self.model_panel, self.python_panel,
+            self.keybinding_panel, self.theme_panel, self.cache_panel, self.update_panel
+        ]
+        for panel in panels:
+            if hasattr(panel, 'update_theme'):
+                panel.update_theme()
+
+        # 更新其他需要手动调整的组件
+        style = ttk.Style()
+        bg_color = style.lookup('TFrame', 'background') or ('#2b2b2b' if self.is_dark_mode else '#f5f5f5')
+        self.params_canvas.config(bg=bg_color)
+        self.env_canvas.config(bg=bg_color)
+        self.software_canvas.config(bg=bg_color)
 
     def _create_widgets(self) -> None:
         """创建高级设置页面的控件"""
@@ -81,6 +104,7 @@ class AdvancedPage(ttk.Frame):
         # --- Keybinding Panel ---
         self.keybinding_panel = CollapsiblePanel(
             self.software_content_frame,
+            self.controller,
             "按键绑定",
             subtitle="自定义“检查校验”中的快捷键",
             icon="⌨️"
@@ -129,9 +153,31 @@ class AdvancedPage(ttk.Frame):
         )
         save_button.grid(row=0, column=1, sticky='e')
 
+        # --- Theme Panel ---
+        self.theme_panel = CollapsiblePanel(
+            self.software_content_frame,
+            self.controller,
+            "深色模式",
+            subtitle="选择应用的主题模式",
+            icon="🌙"
+        )
+        self.theme_panel.pack(fill="x", expand=False, pady=(0, 1))
+        theme_frame = ttk.Frame(self.theme_panel.content_padding)
+        theme_frame.pack(fill="x", pady=5)
+
+        theme_combo = ttk.Combobox(
+            theme_frame,
+            textvariable=self.theme_var,
+            values=["浅色", "深色", "自动"],
+            state="readonly"
+        )
+        theme_combo.pack(fill="x", expand=True)
+        theme_combo.bind("<<ComboboxSelected>>", lambda event: self.controller.change_theme())
+
         # --- Cache Management Panel ---
         self.cache_panel = CollapsiblePanel(
             self.software_content_frame,
+            self.controller,
             "缓存管理",
             subtitle="清除应用程序生成的临时文件",
             icon="🗑️"
@@ -167,6 +213,7 @@ class AdvancedPage(ttk.Frame):
         # --- 更新面板 ---
         self.update_panel = CollapsiblePanel(
             self.software_content_frame,
+            self.controller,
             "软件更新",
             subtitle="检查、更新和管理软件版本",
             icon="🔄"
@@ -273,7 +320,6 @@ class AdvancedPage(ttk.Frame):
             if self.winfo_exists():
                 self.cache_size_var.set(f"缓存大小: {size_str}")
 
-        # Start the calculation after a short delay to ensure "Calculating..." is visible
         self.master.after(500, lambda: threading.Thread(target=size_thread, daemon=True).start())
 
     def _clear_image_cache_with_refresh(self):
@@ -339,6 +385,7 @@ class AdvancedPage(ttk.Frame):
 
         self.threshold_panel = CollapsiblePanel(
             self.params_content_frame,
+            self.controller,
             title="检测阈值设置",
             subtitle="调整目标检测的置信度和重叠度阈值",
             icon="🎯"
@@ -381,6 +428,7 @@ class AdvancedPage(ttk.Frame):
 
         self.accel_panel = CollapsiblePanel(
             self.params_content_frame,
+            self.controller,
             title="模型加速选项",
             subtitle="控制推理速度与精度的平衡",
             icon="⚡"
@@ -406,6 +454,7 @@ class AdvancedPage(ttk.Frame):
 
         self.advanced_detect_panel = CollapsiblePanel(
             self.params_content_frame,
+            self.controller,
             title="高级检测选项",
             subtitle="配置增强检测功能和特殊选项",
             icon="🔍"
@@ -481,6 +530,7 @@ class AdvancedPage(ttk.Frame):
 
         self.pytorch_panel = CollapsiblePanel(
             self.env_content_frame,
+            self.controller,
             "安装 PyTorch",
             subtitle="安装或修复 PyTorch",
             icon="📦"
@@ -539,6 +589,7 @@ class AdvancedPage(ttk.Frame):
 
         self.model_panel = CollapsiblePanel(
             self.env_content_frame,
+            self.controller,
             "模型管理",
             subtitle="管理用于识别的模型",
             icon="🔧"
@@ -590,6 +641,7 @@ class AdvancedPage(ttk.Frame):
 
         self.python_panel = CollapsiblePanel(
             self.env_content_frame,
+            self.controller,
             "重装单个 Python 组件",
             subtitle="重新安装单个 Pip 软件包",
             icon="🐍"
