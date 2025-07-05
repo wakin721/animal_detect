@@ -109,6 +109,23 @@ class RoundedButton(tk.Canvas):
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
 
+    def update_theme(self):
+        """更新按钮的主题以匹配父主题。"""
+        try:
+            # 这对于tk和ttk小部件都应该有效
+            new_parent_bg = self.master.cget('background')
+            self.config(bg=new_parent_bg)
+        except Exception:
+            # 复杂小部件或主题问题的后备方案
+            style = ttk.Style()
+            new_parent_bg = style.lookup('TFrame', 'background')
+            self.config(bg=new_parent_bg)
+
+        self.parent_bg = self.cget('background')
+
+        # 根据当前状态（活动或正常）重新绘制按钮
+        self.set_active(self.active)
+
     def _on_press(self, event):
         """按钮按下事件处理"""
         self._draw_button("active")
@@ -402,10 +419,9 @@ class SpeedProgressBar(ttk.Frame):
 class CollapsiblePanel(ttk.Frame):
     """现代化可折叠面板组件"""
 
-    def __init__(self, parent, controller, title, subtitle="", icon=None, **kwargs):
+    def __init__(self, parent, title, subtitle="", icon=None, **kwargs):
         super().__init__(parent, **kwargs)
         self.parent = parent
-        self.controller = controller
         self.toggle_callbacks = []
         self._initialize_colors()
 
@@ -455,7 +471,8 @@ class CollapsiblePanel(ttk.Frame):
     def _initialize_colors(self):
         """根据当前主题初始化颜色变量"""
         self.style = ttk.Style()
-        self.is_dark_mode = self.controller.is_dark_mode
+        current_theme = self.style.theme_use()
+        self.is_dark_mode = 'dark' in current_theme
         self.bg_color = "#2b2b2b" if self.is_dark_mode else "#f5f5f5"
         self.header_bg = "#333333" if self.is_dark_mode else "#e5e5e5"
         self.text_color = "#ffffff" if self.is_dark_mode else "#000000"
@@ -482,7 +499,6 @@ class CollapsiblePanel(ttk.Frame):
         # 更新内容区域的样式
         self.content_frame.configure(style="TFrame")
         self.content_padding.configure(style="TFrame")
-
 
     def toggle(self, event=None):
         if self.is_expanded:

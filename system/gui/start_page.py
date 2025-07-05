@@ -12,6 +12,14 @@ class StartPage(ttk.Frame):
         self.controller = controller
         self._create_widgets()
 
+    def update_theme(self):
+        """更新开始页面的主题。"""
+        # 这会更新按钮的画布背景
+        self.start_stop_button.update_theme()
+
+        # 这会更新按钮本身的颜色并重绘它
+        self.set_processing_state(self.controller.is_processing)
+
     def _create_widgets(self):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(3, weight=1)

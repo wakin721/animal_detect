@@ -240,6 +240,8 @@ class ObjectDetectionGUI:
 
     def _update_ui_theme(self):
         self.sidebar.update_theme()
+        if hasattr(self, 'start_page') and hasattr(self.start_page, 'update_theme'):
+            self.start_page.update_theme()
         if hasattr(self, 'advanced_page') and hasattr(self.advanced_page, 'update_theme'):
             self.advanced_page.update_theme()
         self._show_page(self.current_page)
@@ -342,6 +344,7 @@ class ObjectDetectionGUI:
 
         if page_id == "settings":
             self.start_page.pack(fill="both", expand=True)
+            self.status_bar.status_label.config(text="就绪")
         elif page_id == "preview":
             self.preview_page.pack(fill="both", expand=True)
             if hasattr(self, 'start_page'):
@@ -351,21 +354,22 @@ class ObjectDetectionGUI:
                         self.preview_page.update_file_list(file_path)
 
                     file_count = self.preview_page.file_listbox.size()
-                    # self.status_bar.status_label.config(text=f"当前文件夹下有 {file_count} 个图像文件")
+                    self.status_bar.status_label.config(text=f"当前文件夹下有 {file_count} 个图像文件")
 
                     if self.preview_page.file_listbox.size() > 0 and not self.preview_page.file_listbox.curselection():
                         self.preview_page.file_listbox.selection_set(0)
                         self.preview_page.on_file_selected(None)
                 else:
-                    # self.status_bar.status_label.config(text="请在“开始”页面中设置有效的图像文件路径")
-                    pass
+                    self.status_bar.status_label.config(text="请在“开始”页面中设置有效的图像文件路径")
         elif page_id == "advanced":
             self.advanced_page.pack(fill="both", expand=True)
+            self.status_bar.status_label.config(text="就绪")
         elif page_id == "about":
             self.about_page.pack(fill="both", expand=True)
+            self.status_bar.status_label.config(text="就绪")
 
-        # if page_id != "preview" and not self.is_processing:
-        # self.status_bar.status_label.config(text="就绪")
+        if page_id != "preview" and not self.is_processing:
+            self.status_bar.status_label.config(text="就绪")
 
         self.current_page = page_id
 
@@ -469,7 +473,7 @@ class ObjectDetectionGUI:
         self.preview_page.clear_previews()
 
         if not folder_selected:
-            # self.status_bar.status_label.config(text="文件路径已清除")
+            self.status_bar.status_label.config(text="文件路径已清除")
             self._save_current_settings()
             return
 
@@ -477,13 +481,13 @@ class ObjectDetectionGUI:
             self.get_temp_photo_dir(update=True)
             self.preview_page.update_file_list(folder_selected)
             file_count = self.preview_page.file_listbox.size()
-            # self.status_bar.status_label.config(text=f"文件路径已设置，找到 {file_count} 个图像文件。")
+            self.status_bar.status_label.config(text=f"文件路径已设置，找到 {file_count} 个图像文件。")
             self._save_current_settings()
             if self.current_page == "preview":
                 self._show_page("preview")
         else:
             messagebox.showerror("路径错误", f"提供的图像文件路径不存在或不是一个文件夹:\n'{folder_selected}'")
-            # self.status_bar.status_label.config(text="无效的文件路径")
+            self.status_bar.status_label.config(text="无效的文件路径")
 
     def browse_save_path(self):
         folder_selected = filedialog.askdirectory(title="选择结果保存文件夹")
@@ -501,18 +505,18 @@ class ObjectDetectionGUI:
                     os.makedirs(save_path, exist_ok=True)
                     self.start_page.save_path_entry.delete(0, tk.END)
                     self.start_page.save_path_entry.insert(0, save_path)
-                    # self.status_bar.status_label.config(text=f"结果保存路径已创建: {save_path}")
+                    self.status_bar.status_label.config(text=f"结果保存路径已创建: {save_path}")
                     self._save_current_settings()
                 except Exception as e:
                     messagebox.showerror("路径错误", f"无法创建结果保存路径:\n{e}")
-                    # self.status_bar.status_label.config(text="结果保存路径创建失败")
+                    self.status_bar.status_label.config(text="结果保存路径创建失败")
             else:
-                # self.status_bar.status_label.config(text="操作已取消，请输入有效的结果保存路径。")
+                self.status_bar.status_label.config(text="操作已取消，请输入有效的结果保存路径。")
                 pass
         else:
             self.start_page.save_path_entry.delete(0, tk.END)
             self.start_page.save_path_entry.insert(0, save_path)
-            # self.status_bar.status_label.config(text=f"结果保存路径已设置: {save_path}")
+            self.status_bar.status_label.config(text=f"结果保存路径已设置: {save_path}")
             self._save_current_settings()
 
     def show_params_help(self):
@@ -615,7 +619,7 @@ class ObjectDetectionGUI:
     def stop_processing(self):
         if messagebox.askyesno("停止确认", "确定要停止图像处理吗？\n处理进度将被保存，下次可以继续。"):
             self.processing_stop_flag.set()
-            # self.status_bar.status_label.config(text="正在停止处理...")
+            self.status_bar.status_label.config(text="正在停止处理...")
         else:
             messagebox.showinfo("信息", "处理继续进行。")
 
@@ -648,8 +652,7 @@ class ObjectDetectionGUI:
                     break
 
                 if self.master.winfo_exists():
-                    # self.master.after(0, lambda f=filename: self.status_bar.status_label.config(text=f"正在处理: {f}"))
-                    pass
+                    self.master.after(0, lambda f=filename: self.status_bar.status_label.config(text=f"正在处理: {f}"))
                 try:
                     listbox_idx = self.preview_page.file_listbox.get(0, "end").index(filename)
                     if self.master.winfo_exists():
@@ -716,7 +719,7 @@ class ObjectDetectionGUI:
                 if earliest_date: excel_data = DataProcessor.calculate_working_days(excel_data, earliest_date)
                 if excel_data and output_excel: self._export_and_open_excel(excel_data, save_path)
                 self._delete_processing_cache()
-                # if self.master.winfo_exists(): self.status_bar.status_label.config(text="处理完成！")
+                if self.master.winfo_exists(): self.status_bar.status_label.config(text="处理完成！")
                 messagebox.showinfo("成功", "图像处理完成！")
         except Exception as e:
             logger.error(f"处理过程中发生错误: {e}")
@@ -735,11 +738,9 @@ class ObjectDetectionGUI:
             self.processing_stop_flag.clear()
         else:
             if self.processing_stop_flag.is_set():
-                # if self.master.winfo_exists(): self.status_bar.status_label.config(text="处理已停止")
-                pass
-            # elif self.master.winfo_exists() and self.status_bar.status_label.cget("text") != "处理完成！":
-            # self.status_bar.status_label.config(text="就绪")
-            pass
+                if self.master.winfo_exists(): self.status_bar.status_label.config(text="处理已停止")
+            elif self.master.winfo_exists() and self.status_bar.status_label.cget("text") != "处理完成！":
+                self.status_bar.status_label.config(text="就绪")
 
     def _validate_inputs(self, file_path: str, save_path: str) -> bool:
         if not file_path or not os.path.isdir(file_path):
