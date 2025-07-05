@@ -38,6 +38,32 @@ class PreviewPage(ttk.Frame):
         self._create_image_preview_content(self.image_preview_tab)
         self._create_validation_content(self.validation_tab)
 
+    def clear_previews(self):
+        """Clears content from all preview tabs to reset the state."""
+        # Clear image preview tab
+        self.file_listbox.delete(0, tk.END)
+        self.image_label.config(image='', text="请从左侧列表选择图像")
+        if hasattr(self.image_label, 'image'):
+            self.image_label.image = None
+        self.info_text.config(state="normal")
+        self.info_text.delete(1.0, tk.END)
+        self.info_text.config(state="disabled")
+        self.current_image_path = None
+        self.current_detection_results = None
+        self.show_detection_var.set(False)
+
+        # Clear validation check tab
+        self.validation_listbox.delete(0, tk.END)
+        self.validation_image_label.config(image='', text="请从左侧列表选择处理后的图像")
+        if hasattr(self.validation_image_label, 'image'):
+            self.validation_image_label.image = None
+        self.validation_info_text.config(state="normal")
+        self.validation_info_text.delete(1.0, tk.END)
+        self.validation_info_text.config(state="disabled")
+        self.validation_status_label.config(text="未校验")
+        self.validation_progress_var.set("0/0")
+        self.validation_data.clear()
+
     def _create_image_preview_content(self, parent):
         preview_content = ttk.Frame(parent)
         preview_content.pack(fill="both", expand=True)
@@ -145,15 +171,15 @@ class PreviewPage(ttk.Frame):
             self._load_processed_images()
 
     def update_file_list(self, directory: str):
+        # The clearing is now done in clear_previews, called from main_window
         if not os.path.isdir(directory):
             return
-        self.file_listbox.delete(0, tk.END)
+
         try:
             image_files = [f for f in os.listdir(directory) if f.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS)]
             image_files.sort()
             for file in image_files:
                 self.file_listbox.insert(tk.END, file)
-            self.controller.status_bar.status_label.config(text=f"找到 {len(image_files)} 个图像文件")
         except Exception as e:
             logger.error(f"更新文件列表失败: {e}")
 

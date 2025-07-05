@@ -1,4 +1,3 @@
-# system/gui/main_window.py
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import os
@@ -85,6 +84,7 @@ class ObjectDetectionGUI:
         在程序启动时，根据用户设置的通道静默检查更新。
         这个方法现在是启动时检查的唯一入口。
         """
+
         def _startup_check_thread():
             """后台线程，用于处理启动时的静默更新检查。"""
             try:
@@ -268,9 +268,13 @@ class ObjectDetectionGUI:
         self.preview_page = PreviewPage(self.content_frame, self)
         self.advanced_page = AdvancedPage(self.content_frame, self)
         self.about_page = AboutPage(self.content_frame, self)
-        self._show_page("settings")
+
+        # --- FIX: Create status_bar before calling _show_page ---
         self.status_bar = InfoBar(self.master)
         self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
+
+        self._show_page("settings")
+
         if hasattr(self, 'advanced_page') and hasattr(self.advanced_page, 'model_combobox'):
             self.advanced_page._refresh_model_list()
 
@@ -298,6 +302,7 @@ class ObjectDetectionGUI:
         self.preview_page.pack_forget()
         self.advanced_page.pack_forget()
         self.about_page.pack_forget()
+
         if page_id == "settings":
             self.start_page.pack(fill="both", expand=True)
         elif page_id == "preview":
@@ -305,14 +310,25 @@ class ObjectDetectionGUI:
             if hasattr(self, 'start_page'):
                 file_path = self.start_page.file_path_entry.get()
                 if file_path and os.path.isdir(file_path):
-                    if self.preview_page.file_listbox.size() == 0: self.preview_page.update_file_list(file_path)
+                    if self.preview_page.file_listbox.size() == 0:
+                        self.preview_page.update_file_list(file_path)
+
+                    file_count = self.preview_page.file_listbox.size()
+                    self.status_bar.status_label.config(text=f"当前文件夹下有 {file_count} 个图像文件")
+
                     if self.preview_page.file_listbox.size() > 0 and not self.preview_page.file_listbox.curselection():
                         self.preview_page.file_listbox.selection_set(0)
                         self.preview_page.on_file_selected(None)
+                else:
+                    self.status_bar.status_label.config(text="请在“开始”页面中设置有效的图像文件路径")
         elif page_id == "advanced":
             self.advanced_page.pack(fill="both", expand=True)
         elif page_id == "about":
             self.about_page.pack(fill="both", expand=True)
+
+        if page_id != "preview" and not self.is_processing:
+            self.status_bar.status_label.config(text="就绪")
+
         self.current_page = page_id
 
     def _bind_events(self):
@@ -386,17 +402,30 @@ class ObjectDetectionGUI:
             self.start_page.file_path_entry.delete(0, tk.END)
             self.start_page.file_path_entry.insert(0, folder_selected)
             self._validate_and_update_file_path()
+        else:
+            # Handle user cancelling the dialog by clearing the path
+            self.start_page.file_path_entry.delete(0, tk.END)
+            self._validate_and_update_file_path()
 
     def _validate_and_update_file_path(self, event=None):
         folder_selected = self.start_page.file_path_entry.get().strip()
-        if not folder_selected: return
+
+        # Always clear previews first to handle path changes correctly
+        self.preview_page.clear_previews()
+
+        if not folder_selected:
+            self.status_bar.status_label.config(text="文件路径已清除")
+            self._save_current_settings()
+            return
+
         if os.path.isdir(folder_selected):
-            self.start_page.file_path_entry.delete(0, tk.END)
-            self.start_page.file_path_entry.insert(0, folder_selected)
             self.get_temp_photo_dir(update=True)
             self.preview_page.update_file_list(folder_selected)
-            self.status_bar.status_label.config(text=f"文件路径已设置为: {folder_selected}")
+            file_count = self.preview_page.file_listbox.size()
+            self.status_bar.status_label.config(text=f"文件路径已设置，找到 {file_count} 个图像文件。")
             self._save_current_settings()
+            if self.current_page == "preview":
+                self._show_page("preview")
         else:
             messagebox.showerror("路径错误", f"提供的图像文件路径不存在或不是一个文件夹:\n'{folder_selected}'")
             self.status_bar.status_label.config(text="无效的文件路径")
