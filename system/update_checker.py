@@ -241,19 +241,46 @@ def perform_download(parent_window, download_url):
                         return
                     args = [sys.executable, main_script_path]
 
-                # 在新的控制台中重新启动应用程序
-                if platform.system() == "Windows":
-                    # 在Windows上，使用'start'命令在一个新窗口中创建一个独立的进程。
-                    # 这能正确地模拟用户双击应用程序的效果。
-                    cmd = ' '.join(f'"{arg}"' for arg in args)
-                    subprocess.Popen(f'start "Restarting Application" {cmd}', shell=True)
-                else:
-                    # 对于macOS和Linux，标准的Popen通常就足够了。
-                    subprocess.Popen(args)
+                try:
+                    # 在新的控制台中重新启动应用程序
+                    if platform.system() == "Windows":
+                        # 在Windows上，使用'start'命令在一个新窗口中创建一个独立的进程。
+                        # 这能正确地模拟用户双击应用程序的效果, 弹出命令行并在之后自动关闭。
+                        cmd = ' '.join(f'"{arg}"' for arg in args)
+                        subprocess.Popen(f'start "Restarting Application" {cmd}', shell=True)
+                    elif platform.system() == "Darwin": # macOS
+                        # 在macOS上，使用AppleScript在新Terminal窗口中运行命令。
+                        cmd = ' '.join(f'"{arg}"' for arg in args)
+                        mac_cmd = cmd.replace("\"", "\\\"")
+                        subprocess.Popen(
+                            ["osascript", "-e", f'tell app "Terminal" to do script "{mac_cmd}"'],
+                            close_fds=True
+                        )
+                    else: # Linux
+                        # 在Linux上，尝试在新的终端模拟器中启动。
+                        terminal_found = False
+                        for terminal in ["gnome-terminal", "konsole", "xterm"]:
+                            try:
+                                if terminal == "gnome-terminal":
+                                    subprocess.Popen([terminal, "--"] + args, close_fds=True)
+                                elif terminal == "konsole":
+                                    subprocess.Popen([terminal, "-e"] + args, close_fds=True)
+                                elif terminal == "xterm":
+                                    subprocess.Popen([terminal, "-e"] + args, close_fds=True)
+                                terminal_found = True
+                                break
+                            except FileNotFoundError:
+                                continue
+                        if not terminal_found:
+                            # 如果找不到终端，则显示消息提示用户手动重启
+                             _show_messagebox(parent_window, "重启提示", "无法自动打开新终端，请手动重启程序以应用更新。", "info")
 
-                # 关闭当前的应用程序实例
-                parent_window.destroy()
-                sys.exit()
+                    # 关闭当前的应用程序实例
+                    parent_window.destroy()
+                    sys.exit()
+                
+                except Exception as e:
+                    _show_messagebox(parent_window, "重启失败", f"无法重新启动应用程序: {e}", "error")
 
 
         parent_window.after(0, ask_restart)
