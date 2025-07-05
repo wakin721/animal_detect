@@ -11,6 +11,7 @@ from tkinter import ttk, messagebox
 import sys
 import subprocess
 import threading
+import platform
 from system.config import APP_VERSION
 
 # GitHub仓库信息
@@ -229,15 +230,31 @@ def perform_download(parent_window, download_url):
         def ask_restart():
             if messagebox.askyesno("更新成功", "程序已成功更新！\n是否立即重启应用程序以应用更改？",
                                    parent=parent_window):
+                # 确定重启命令的参数
                 if getattr(sys, 'frozen', False):
-                    main_script_path = sys.executable
-                    args = [main_script_path]
+                    args = [sys.executable]
                 else:
+                    app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                     main_script_path = os.path.join(app_root, 'main.py')
+                    if not os.path.exists(main_script_path):
+                        _show_messagebox(parent_window, "重启错误", f"找不到主脚本: {main_script_path}", "error")
+                        return
                     args = [sys.executable, main_script_path]
-                subprocess.Popen(args)
+
+                # 在新的控制台中重新启动应用程序
+                if platform.system() == "Windows":
+                    # 在Windows上，使用'start'命令在一个新窗口中创建一个独立的进程。
+                    # 这能正确地模拟用户双击应用程序的效果。
+                    cmd = ' '.join(f'"{arg}"' for arg in args)
+                    subprocess.Popen(f'start "Restarting Application" {cmd}', shell=True)
+                else:
+                    # 对于macOS和Linux，标准的Popen通常就足够了。
+                    subprocess.Popen(args)
+
+                # 关闭当前的应用程序实例
                 parent_window.destroy()
                 sys.exit()
+
 
         parent_window.after(0, ask_restart)
 
