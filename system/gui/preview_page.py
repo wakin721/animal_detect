@@ -6,6 +6,7 @@ import json
 import logging
 import cv2
 import threading
+import re
 
 from system.config import NORMAL_FONT, SUPPORTED_IMAGE_EXTENSIONS
 
@@ -22,8 +23,10 @@ class PreviewPage(ttk.Frame):
         self.original_image = None
         self.current_image_path = None
         self.current_detection_results = None
+        self.active_keybinds = []
 
         self._create_widgets()
+        self.rebind_keys()
 
     def _create_widgets(self):
         self.preview_notebook = ttk.Notebook(self)
@@ -161,14 +164,77 @@ class PreviewPage(ttk.Frame):
         self.export_error_button.pack(side="right", padx=5)
 
         self.validation_listbox.bind("<<ListboxSelect>>", self._on_validation_file_selected)
-        parent.bind("<Key-1>", lambda e: self._mark_validation(True))
-        parent.bind("<Key-2>", lambda e: self._mark_validation(False))
+
+    def rebind_keys(self):
+        """Unbinds old keys and binds new, case-insensitive keys."""
+        # 1. Unbind all previously bound keys
+        for key_sequence in self.active_keybinds:
+            self.controller.master.unbind(key_sequence)
+        self.active_keybinds = []
+
+        # 2. Get new key definitions
+        key_map = {
+            "up": (self.controller.advanced_page.key_up_var.get(), self._select_prev_image),
+            "down": (self.controller.advanced_page.key_down_var.get(), self._select_next_image),
+            "correct": (self.controller.advanced_page.key_correct_var.get(), lambda e: self._mark_validation(True)),
+            "incorrect": (
+            self.controller.advanced_page.key_incorrect_var.get(), lambda e: self._mark_validation(False)),
+        }
+
+        # 3. Bind new keys and store them
+        for action, (key_def, command) in key_map.items():
+            sequences_to_bind = []
+            # Check for standard Tkinter key format like <Key-a> or <Up>
+            match = re.fullmatch(r"<Key-([a-zA-Z0-9])>", key_def)
+            if match:
+                key_char = match.group(1)
+                if key_char.isalpha():
+                    sequences_to_bind.append(f"<Key-{key_char.lower()}>")
+                    sequences_to_bind.append(f"<Key-{key_char.upper()}>")
+                else:
+                    sequences_to_bind.append(key_def)  # for numbers like <Key-1>
+            elif len(key_def) == 1 and key_def.isalpha():  # Handle raw single letters like 'a'
+                sequences_to_bind.append(f"<Key-{key_def.lower()}>")
+                sequences_to_bind.append(f"<Key-{key_def.upper()}>")
+            else:  # Assume it's a special key like <Up>
+                sequences_to_bind.append(key_def)
+
+            for seq in sequences_to_bind:
+                if seq not in self.active_keybinds:
+                    self.controller.master.bind(seq, command)
+                    self.active_keybinds.append(seq)
+
+    def _select_prev_image(self, event=None):
+        """Selects the previous image in the validation listbox."""
+        if not self.validation_listbox.curselection():
+            return
+        current_index = self.validation_listbox.curselection()[0]
+        if current_index > 0:
+            next_index = current_index - 1
+            self.validation_listbox.selection_clear(0, tk.END)
+            self.validation_listbox.selection_set(next_index)
+            self.validation_listbox.see(next_index)
+            self._on_validation_file_selected(None)
+
+    def _select_next_image(self, event=None):
+        """Selects the next image in the validation listbox."""
+        if not self.validation_listbox.curselection():
+            return
+        current_index = self.validation_listbox.curselection()[0]
+        if current_index < self.validation_listbox.size() - 1:
+            next_index = current_index + 1
+            self.validation_listbox.selection_clear(0, tk.END)
+            self.validation_listbox.selection_set(next_index)
+            self.validation_listbox.see(next_index)
+            self._on_validation_file_selected(None)
 
     def _on_preview_tab_changed(self, event):
         selected_tab = self.preview_notebook.select()
         tab_text = self.preview_notebook.tab(selected_tab, "text")
         if tab_text == "检查校验":
             self._load_processed_images()
+            self.validation_tab.focus_set()  # Set focus to handle key events
+            self.rebind_keys()
 
     def update_file_list(self, directory: str):
         # The clearing is now done in clear_previews, called from main_window
@@ -289,7 +355,7 @@ class PreviewPage(ttk.Frame):
             return
         file_name = self.file_listbox.get(selection[0])
         file_path = os.path.join(self.controller.start_page.file_path_entry.get(), file_name)
-        self.controller.status_bar.status_label.config(text="正在检测图像...")
+        # self.controller.status_bar.status_label.config(text="正在检测图像...")
         self.detect_button.config(state="disabled")
         threading.Thread(target=self._detect_image_thread, args=(file_path, file_name), daemon=True).start()
 
@@ -321,7 +387,7 @@ class PreviewPage(ttk.Frame):
             self.master.after(0, lambda msg=str(err): messagebox.showerror("错误", f"检测图像失败: {msg}"))
         finally:
             self.master.after(0, lambda: self.detect_button.config(state="normal"))
-            self.master.after(0, lambda: self.controller.status_bar.status_label.config(text="检测完成"))
+            # self.master.after(0, lambda: self.controller.status_bar.status_label.config(text="检测完成"))
 
     def _update_detection_info(self, species_info):
         self.info_text.config(state="normal")
@@ -422,12 +488,9 @@ class PreviewPage(ttk.Frame):
         self.validation_status_label.config(text=f"已标记: {'正确 ✅' if is_correct else '错误 ❌'}")
         self._save_validation_data()
         self._update_validation_progress()
-        current_index = selection[0]
-        next_index = (current_index + 1) % self.validation_listbox.size()
-        self.validation_listbox.selection_clear(0, tk.END)
-        self.validation_listbox.selection_set(next_index)
-        self.validation_listbox.see(next_index)
-        self._on_validation_file_selected(None)
+
+        # Automatically move to the next image
+        self._select_next_image()
 
     def _update_validation_progress(self):
         total = self.validation_listbox.size()

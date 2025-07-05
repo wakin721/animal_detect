@@ -29,6 +29,14 @@ class AdvancedPage(ttk.Frame):
         self.controller.use_augment_var = tk.BooleanVar(value=True)
         self.controller.use_agnostic_nms_var = tk.BooleanVar(value=True)
 
+        # Keybinding variables
+        self.key_up_var = tk.StringVar(value='<Up>')
+        self.key_down_var = tk.StringVar(value='<Down>')
+        self.key_correct_var = tk.StringVar(value='<Key-1>')
+        self.key_incorrect_var = tk.StringVar(value='<Key-2>')
+
+        self.cache_size_var = tk.StringVar(value="正在计算...")
+
         self._create_widgets()
 
     def _create_widgets(self) -> None:
@@ -70,7 +78,58 @@ class AdvancedPage(ttk.Frame):
             (0, 0), window=self.software_content_frame, anchor="nw"
         )
 
-        # --- 新增：缓存管理面板 ---
+        # --- Keybinding Panel ---
+        self.keybinding_panel = CollapsiblePanel(
+            self.software_content_frame,
+            "按键绑定",
+            subtitle="自定义“检查校验”中的快捷键",
+            icon="⌨️"
+        )
+        self.keybinding_panel.pack(fill="x", expand=False, pady=(0, 1))
+        keybinding_grid = ttk.Frame(self.keybinding_panel.content_padding)
+        keybinding_grid.pack(fill='x', pady=5)
+        keybinding_grid.columnconfigure(1, weight=1)
+
+        key_map = {
+            "上一张图片:": self.key_up_var,
+            "下一张图片:": self.key_down_var,
+            "标记为“正确”:": self.key_correct_var,
+            "标记为“错误”:": self.key_incorrect_var,
+        }
+
+        i = 0
+        for i, (text, var) in enumerate(key_map.items()):
+            ttk.Label(keybinding_grid, text=text).grid(row=i, column=0, sticky='w', padx=5, pady=5)
+            entry = ttk.Entry(keybinding_grid, textvariable=var, width=20)
+            entry.grid(row=i, column=1, sticky='we', padx=5, pady=5)
+
+        ttk.Label(keybinding_grid, text="提示: 单个字母的快捷键不区分大小写。", font=("Segoe UI", 8)).grid(row=i + 1,
+                                                                                                          columnspan=2,
+                                                                                                          sticky='w',
+                                                                                                          padx=5,
+                                                                                                          pady=5)
+
+        keybinding_buttons_frame = ttk.Frame(self.keybinding_panel.content_padding)
+        keybinding_buttons_frame.pack(fill='x', pady=10)
+        keybinding_buttons_frame.columnconfigure(0, weight=1)
+
+        help_button = ttk.Button(
+            keybinding_buttons_frame,
+            text="查看示例",
+            command=self._show_keybinding_help,
+            style="Secondary.TButton"
+        )
+        help_button.grid(row=0, column=0, sticky='w')
+
+        save_button = ttk.Button(
+            keybinding_buttons_frame,
+            text="保存快捷键",
+            command=self._save_keybindings,
+            style="Action.TButton"
+        )
+        save_button.grid(row=0, column=1, sticky='e')
+
+        # --- Cache Management Panel ---
         self.cache_panel = CollapsiblePanel(
             self.software_content_frame,
             "缓存管理",
@@ -81,16 +140,29 @@ class AdvancedPage(ttk.Frame):
 
         cache_action_frame = ttk.Frame(self.cache_panel.content_padding)
         cache_action_frame.pack(fill="x", pady=5)
+        cache_action_frame.columnconfigure(0, weight=1)
 
-        ttk.Label(cache_action_frame, text="清除处理过程中生成的图片预览和数据缓存。").pack(anchor="w", pady=(0, 10))
+        cache_info_label = ttk.Label(cache_action_frame, textvariable=self.cache_size_var)
+        cache_info_label.grid(row=0, column=0, sticky='w', pady=(0, 10))
+
+        buttons_container = ttk.Frame(cache_action_frame)
+        buttons_container.grid(row=1, column=0, sticky='e')
+
+        refresh_button = ttk.Button(
+            buttons_container,
+            text="刷新大小",
+            command=self.update_cache_size,
+            style="Secondary.TButton"
+        )
+        refresh_button.pack(side='left', padx=(0, 5))
 
         clear_cache_button = ttk.Button(
-            cache_action_frame,
+            buttons_container,
             text="清除图片缓存",
-            command=self.controller.clear_image_cache,  # 指向新的controller方法
+            command=self._clear_image_cache_with_refresh,
             style="Action.TButton"
         )
-        clear_cache_button.pack(anchor="e", pady=5)
+        clear_cache_button.pack(side='left')
 
         # --- 更新面板 ---
         self.update_panel = CollapsiblePanel(
@@ -132,6 +204,82 @@ class AdvancedPage(ttk.Frame):
         self._configure_software_scrolling()
         self.master.after(100, lambda: self.software_canvas.yview_moveto(0.0))
 
+    def _show_keybinding_help(self):
+        help_text = """
+快捷键格式示例
+
+您可以使用以下格式来定义快捷键。
+
+- **普通按键:** - 字母: a, b, c (大小写均可)
+  - 数字: 1, 2, 3
+
+- **特殊按键 (需用尖括号):**
+  - 功能键: <F1>, <F2>, ... <F12>
+  - 方向键: <Up>, <Down>, <Left>, <Right>
+  - 其他: <Space>, <Return> (回车), <Escape>, <Tab>
+  - 数字键盘: <KP_0>, <KP_1>, ... <KP_Add>, <KP_Enter>
+
+- **修饰键组合 (用连字符连接):**
+  - Ctrl: <Control-a>, <Control-Up>
+  - Alt: <Alt-a>, <Alt-Left>
+  - Shift: <Shift-a> (或直接用大写 A)
+
+- **鼠标按键:**
+  - 左键: <Button-1> 或 <1>
+  - 中键: <Button-2> 或 <2>
+  - 右键: <Button-3> 或 <3>
+  - 滚轮: <MouseWheel>
+
+**注意:** 单个字母的快捷键会自动识别大小写。
+"""
+        messagebox.showinfo("快捷键设置示例", help_text, parent=self.master)
+
+    def _save_keybindings(self):
+        """Saves the keybinding settings and re-binds them in the preview page."""
+        self.controller._save_current_settings()
+        self.controller.preview_page.rebind_keys()
+        messagebox.showinfo("成功", "快捷键设置已保存并生效。", parent=self.master)
+
+    def update_cache_size(self):
+        """Calculates and updates the cache size display in a separate thread."""
+        self.cache_size_var.set("缓存大小: 正在计算...")
+        self.master.update_idletasks()
+
+        def get_dir_size(path):
+            total_size = 0
+            try:
+                for dirpath, dirnames, filenames in os.walk(path):
+                    for f in filenames:
+                        fp = os.path.join(dirpath, f)
+                        if not os.path.islink(fp):
+                            total_size += os.path.getsize(fp)
+            except FileNotFoundError:
+                return 0  # Path doesn't exist
+            return total_size
+
+        def size_thread():
+            cache_dir = os.path.join(self.controller.settings_manager.base_dir, "temp", "photo")
+            size_in_bytes = get_dir_size(cache_dir)
+
+            if size_in_bytes < 1024:
+                size_str = f"{size_in_bytes} Bytes"
+            elif size_in_bytes < 1024 ** 2:
+                size_str = f"{size_in_bytes / 1024:.2f} KB"
+            elif size_in_bytes < 1024 ** 3:
+                size_str = f"{size_in_bytes / 1024 ** 2:.2f} MB"
+            else:
+                size_str = f"{size_in_bytes / 1024 ** 3:.2f} GB"
+
+            if self.winfo_exists():
+                self.cache_size_var.set(f"缓存大小: {size_str}")
+
+        # Start the calculation after a short delay to ensure "Calculating..." is visible
+        self.master.after(500, lambda: threading.Thread(target=size_thread, daemon=True).start())
+
+    def _clear_image_cache_with_refresh(self):
+        self.controller.clear_image_cache()
+        self.master.after(500, self.update_cache_size)
+
     def _configure_software_scrolling(self):
         """配置软件设置页面的滚动"""
 
@@ -154,12 +302,15 @@ class AdvancedPage(ttk.Frame):
         self.software_canvas.bind("<Configure>", _configure_canvas)
 
     def _on_tab_changed(self, event):
-        current_tab = self.advanced_notebook.select()
-        tab_text = self.advanced_notebook.tab(current_tab, "text")
-        if tab_text == "环境维护" and hasattr(self, 'env_canvas'):
-            self.master.after(10, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
-        elif tab_text == "软件设置" and hasattr(self, 'software_canvas'):
-            self.master.after(10, lambda: self.software_canvas.configure(scrollregion=self.software_canvas.bbox("all")))
+        current_tab_index = self.advanced_notebook.index(self.advanced_notebook.select())
+        if current_tab_index == 1:  # Env Maintenance
+            if hasattr(self, 'env_canvas'):
+                self.master.after(10, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
+        elif current_tab_index == 2:  # Software Settings
+            if hasattr(self, 'software_canvas'):
+                self.master.after(10,
+                                  lambda: self.software_canvas.configure(scrollregion=self.software_canvas.bbox("all")))
+                self.update_cache_size()
 
     def _create_model_params_content(self) -> None:
         """创建模型参数设置内容"""
@@ -575,7 +726,7 @@ class AdvancedPage(ttk.Frame):
         self.controller.use_fp16_var.set(self.controller.cuda_available)
         self.controller.use_augment_var.set(False)
         self.controller.use_agnostic_nms_var.set(False)
-        self.controller.status_bar.show_message("已重置所有参数到默认值", 3000)
+        # self.controller.status_bar.show_message("已重置所有参数到默认值", 3000)
 
     def _check_pytorch_status(self) -> None:
         """检查PyTorch安装状态"""
@@ -589,226 +740,175 @@ class AdvancedPage(ttk.Frame):
         except Exception as e:
             self.pytorch_status_var.set(f"检查失败: {str(e)}")
 
-    def _ask_for_restart(self, title="操作完成"):
-        """弹窗询问用户是否重启应用"""
-        if messagebox.askyesno(title, "操作已完成，建议重启软件以应用所有更改。\n是否立即重启？"):
-            try:
-                python_executable = sys.executable
-                if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
-                    console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
-                    if os.path.exists(console_executable):
-                        python_executable = console_executable
-                main_script = sys.argv[0]
-                subprocess.Popen([python_executable, main_script])
-                self.controller.master.destroy()
-            except Exception as e:
-                messagebox.showerror("重启失败", f"无法自动重启应用: {e}")
-
-    def _run_install_in_terminal(self, command_args, status_var, success_title):
-        """在新终端窗口中运行安装命令，完成后自动关闭并提示重启"""
-
-        def installation_thread():
-            try:
-                python_executable = sys.executable
-
-                # 确保使用正确的python可执行文件
-                if os.name == 'nt' and 'pythonw.exe' in python_executable.lower():
-                    console_executable = os.path.join(os.path.dirname(python_executable), 'python.exe')
-                    if os.path.exists(console_executable):
-                        python_executable = console_executable
-
-                self.master.after(0, lambda: status_var.set("安装已启动..."))
-
-                if platform.system() == "Windows":
-                    # 在Windows上，创建一个cmd命令来在新窗口中运行pip
-                    # 使用cmd /c 来执行命令并自动关闭窗口
-                    cmd_parts = []
-                    cmd_parts.append(f'"{python_executable}"')
-                    cmd_parts.extend(command_args)
-
-                    # 构建完整的cmd命令
-                    pip_command = " ".join(cmd_parts)
-
-                    # 创建一个批处理命令，成功后暂停5秒再关闭
-                    batch_cmd = f'''
-@echo off
-echo Starting installation...
-echo.
-{pip_command}
-if %ERRORLEVEL% EQU 0 (
-    echo.
-    echo Installation completed successfully!
-    echo This window will close in 5 seconds...
-    timeout /t 5 /nobreak > nul
-) else (
-    echo.
-    echo Installation failed with error code %ERRORLEVEL%
-    echo Please check the error messages above.
-    echo Press any key to close this window...
-    pause > nul
-)
-'''
-
-                    # 写入临时批处理文件
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.bat', delete=False) as f:
-                        f.write(batch_cmd)
-                        batch_file = f.name
-
-                    try:
-                        # 在新的cmd窗口中运行批处理文件
-                        process = subprocess.Popen(['cmd', '/c', 'start', 'cmd', '/c', batch_file],
-                                                 shell=False,
-                                                 creationflags=subprocess.CREATE_NEW_CONSOLE)
-                        process.wait()  # 等待窗口关闭
-
-                        # 检查安装是否成功（这里简单假设如果没有异常就是成功）
-                        self.master.after(0, lambda: status_var.set("安装完成"))
-                        self.master.after(100, lambda: self._ask_for_restart(success_title))
-
-                    finally:
-                        # 清理临时文件
-                        try:
-                            os.unlink(batch_file)
-                        except:
-                            pass
-
-                else:  # Linux/macOS
-                    # 对于Unix系统，使用终端窗口
-                    cmd_parts = [python_executable]
-                    cmd_parts.extend(command_args)
-
-                    # 构建shell脚本
-                    shell_script = f'''#!/bin/bash
-echo "Starting installation..."
-echo ""
-{" ".join(cmd_parts)}
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "Installation completed successfully!"
-    echo "This window will close in 5 seconds..."
-    sleep 5
-else
-    echo ""
-    echo "Installation failed"
-    echo "Press Enter to close this window..."
-    read
-fi
-'''
-
-                    # 写入临时脚本文件
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
-                        f.write(shell_script)
-                        script_file = f.name
-
-                    try:
-                        os.chmod(script_file, 0o755)
-
-                        # 尝试不同的终端模拟器
-                        terminal_commands = [
-                            ['gnome-terminal', '--', 'bash', script_file],
-                            ['konsole', '-e', 'bash', script_file],
-                            ['xterm', '-e', 'bash', script_file],
-                            ['terminal', '-e', 'bash', script_file]  # macOS
-                        ]
-
-                        process_started = False
-                        for cmd in terminal_commands:
-                            try:
-                                process = subprocess.Popen(cmd)
-                                process_started = True
-                                break
-                            except FileNotFoundError:
-                                continue
-
-                        if process_started:
-                            self.master.after(0, lambda: status_var.set("安装完成"))
-                            self.master.after(100, lambda: self._ask_for_restart(success_title))
-                        else:
-                            # 如果没有找到终端，回退到静默安装
-                            process = subprocess.run(cmd_parts, capture_output=True, text=True)
-                            if process.returncode == 0:
-                                self.master.after(0, lambda: status_var.set("安装成功！"))
-                                self.master.after(100, lambda: self._ask_for_restart(success_title))
-                            else:
-                                error_msg = f"安装失败: {process.stderr}"
-                                self.master.after(0, lambda: status_var.set("安装失败"))
-                                self.master.after(0, lambda: messagebox.showerror("安装错误", error_msg))
-
-                    finally:
-                        # 清理临时文件
-                        try:
-                            os.unlink(script_file)
-                        except:
-                            pass
-
-            except Exception as e:
-                error_msg = f"执行安装命令时出错: {e}"
-                logger.error(error_msg)
-                self.master.after(0, lambda: status_var.set(f"启动失败: {e}"))
-                self.master.after(0, lambda: messagebox.showerror("错误", error_msg))
-            finally:
-                self.master.after(0, lambda: self.install_button.configure(state="normal"))
-                if hasattr(self, 'install_package_btn'):
-                    self.master.after(0, lambda: self.install_package_btn.configure(state="normal"))
-
-        threading.Thread(target=installation_thread, daemon=True).start()
-
-    def _install_pytorch(self):
-        """准备并启动PyTorch安装"""
-        version_str = self.pytorch_version_var.get()
-        if not version_str:
+    def _install_pytorch(self) -> None:
+        """安装PyTorch"""
+        version = self.pytorch_version_var.get()
+        if not version:
             messagebox.showerror("错误", "请选择PyTorch版本")
             return
-        if not messagebox.askyesno("确认安装",
-                                   f"将开始安装 PyTorch {version_str}。\n过程可能需要几分钟，请保持网络连接。\n是否继续？"):
+
+        message = f"将安装 PyTorch {version}"
+        if self.force_reinstall_var.get():
+            message += "，将先卸载现有安装"
+
+        if not messagebox.askyesno("确认安装", message + "\n\n是否继续？"):
+            return
+
+        is_cuda = "CPU" not in version
+        cuda_version = None
+        if is_cuda:
+            cuda_match = re.search(r"CUDA (\d+\.\d+)", version)
+            if cuda_match:
+                cuda_version = cuda_match.group(1)
+
+        pytorch_match = re.search(r"(\d+\.\d+\.\d+)", version)
+        if pytorch_match:
+            pytorch_version = pytorch_match.group(1)
+        else:
+            messagebox.showerror("错误", "无法解析PyTorch版本")
             return
 
         self.install_button.configure(state="disabled")
-        self.pytorch_status_var.set("正在准备安装...")
+        self.pytorch_status_var.set("准备安装...")
         self.master.update_idletasks()
 
-        pytorch_match = re.search(r"(\d+\.\d+\.\d+)", version_str)
-        cuda_match = re.search(r"CUDA (\d+\.\d+)", version_str)
-        pytorch_version = pytorch_match.group(1) if pytorch_match else None
-        cuda_version = cuda_match.group(1) if cuda_match else None
+        def install_thread():
+            try:
+                self._run_pytorch_install(pytorch_version, cuda_version)
+            except Exception as e:
+                self.master.after(0, lambda: self.pytorch_status_var.set(f"安装失败: {str(e)}"))
+                self.master.after(0, lambda: self.install_button.configure(state="normal"))
 
-        if not pytorch_version:
-            messagebox.showerror("错误", "无法解析PyTorch版本")
-            self.install_button.configure(state="normal")
-            return
+        threading.Thread(target=install_thread, daemon=True).start()
 
-        command_args = ["-m", "pip", "install", "--upgrade"]
-        if self.force_reinstall_var.get():
-            command_args.append("--force-reinstall")
-        command_args.extend([f"torch=={pytorch_version}", "torchvision", "torchaudio"])
-        if cuda_version:
-            cuda_str_map = {"11.8": "cu118", "12.1": "cu121", "12.6": "cu126", "12.8": "cu128"}
-            cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
-            command_args.extend(["--index-url", f"https://download.pytorch.org/whl/{cuda_str}"])
-        else:
-            command_args.extend(["--index-url", "https://download.pytorch.org/whl/cpu"])
+    def _run_pytorch_install(self, pytorch_version, cuda_version=None):
+        """使用弹出命令行窗口安装PyTorch"""
+        try:
+            self.master.after(0, lambda: self.pytorch_status_var.set("正在启动安装..."))
 
-        self._run_install_in_terminal(command_args, self.pytorch_status_var, "PyTorch 安装完成")
+            if cuda_version:
+                cuda_str_map = {"11.8": "cu118", "12.1": "cu121", "12.6": "cu126", "12.8": "cu128"}
+                cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
+                install_cmd = f"pip install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/{cuda_str}"
+            else:
+                install_cmd = f"pip install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
 
-    def _install_python_package(self):
-        """准备并启动单个Python包的安装"""
+            if self.force_reinstall_var.get():
+                command = (
+                    f"echo 正在卸载现有PyTorch... && "
+                    f"pip uninstall -y torch torchvision torchaudio && "
+                    f"echo 卸载完成，开始安装新版本... && "
+                    f"{install_cmd} && "
+                    f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
+                    f"timeout /t 5"
+                )
+            else:
+                command = (
+                    f"echo 正在安装PyTorch {pytorch_version}... && "
+                    f"{install_cmd} && "
+                    f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
+                    f"timeout /t 5"
+                )
+
+            self.master.after(0, lambda: self.pytorch_status_var.set("安装已启动，请查看命令行窗口"))
+
+            if platform.system() == "Windows":
+                subprocess.Popen(f"start cmd /C \"{command}\"", shell=True)
+            else:
+                if platform.system() == "Darwin":
+                    mac_command = command.replace("timeout /t 5", "sleep 5")
+                    subprocess.Popen(["osascript", "-e", f'tell app "Terminal" to do script "{mac_command}"'])
+                else:
+                    linux_command = command.replace("timeout /t 5", "sleep 5")
+                    for terminal in ["gnome-terminal", "konsole", "xterm"]:
+                        try:
+                            if terminal == "gnome-terminal":
+                                subprocess.Popen([terminal, "--", "bash", "-c", f"{linux_command}"])
+                            elif terminal == "konsole":
+                                subprocess.Popen([terminal, "-e", f"bash -c '{linux_command}'"])
+                            elif terminal == "xterm":
+                                subprocess.Popen([terminal, "-e", f"bash -c '{linux_command}'"])
+                            break
+                        except FileNotFoundError:
+                            continue
+
+            self.master.after(2000, lambda: self.install_button.configure(state="normal"))
+            self.master.after(2000, lambda: messagebox.showinfo("安装已启动",
+                                                                "PyTorch安装已在命令行窗口中启动，\n"
+                                                                "请查看命令行窗口了解安装进度，\n"
+                                                                "安装完成后，重启程序以使更改生效。\n"
+                                                                "命令执行完成后窗口将在5秒后自动关闭。"))
+
+            version_text = f"{pytorch_version} {'(CUDA ' + cuda_version + ')' if cuda_version else '(CPU)'}"
+            self.master.after(3000, lambda: self.pytorch_status_var.set(f"已完成安装 PyTorch {version_text}"))
+
+        except Exception as e:
+            logger.error(f"安装PyTorch出错: {e}")
+            self.master.after(0, lambda: self.pytorch_status_var.set(f"安装失败: {str(e)}"))
+            self.master.after(0, lambda: self.install_button.configure(state="normal"))
+            self.master.after(0, lambda: messagebox.showerror("安装错误", f"安装PyTorch失败：\n{str(e)}"))
+
+    def _install_python_package(self) -> None:
+        """安装Python包"""
         package = self.package_var.get().strip()
         if not package:
             messagebox.showerror("错误", "请输入包名称")
             return
+
         version_constraint = self.version_constraint_var.get().strip()
-        package_spec = f"{package}{version_constraint}"
-        if not messagebox.askyesno("确认安装", f"将开始安装 {package_spec}。\n是否继续？"):
+        package_spec = f"{package}{version_constraint}" if version_constraint else package
+
+        if not messagebox.askyesno("确认安装", f"将安装 {package_spec}\n\n是否继续？"):
             return
 
-        self.install_package_btn.configure(state="disabled")
-        self.package_status_var.set("正在准备安装...")
+        self.package_status_var.set("准备安装...")
         self.master.update_idletasks()
 
-        command_args = ["-m", "pip", "install", "--upgrade", package_spec]
-        self._run_install_in_terminal(command_args, self.package_status_var, f"安装 {package_spec} 完成")
+        def install_thread():
+            try:
+                self._run_pip_install(package_spec)
+            except Exception as e:
+                logger.error(f"安装Python包出错: {e}")
+                self.master.after(0, lambda: self.package_status_var.set(f"安装失败: {str(e)}"))
+
+        threading.Thread(target=install_thread, daemon=True).start()
+
+    def _run_pip_install(self, package_spec):
+        """使用弹出命令行窗口安装Python包"""
+        try:
+            self.master.after(0, lambda: self.package_status_var.set("正在启动安装..."))
+
+            install_cmd = f"pip install {package_spec}"
+            command = (
+                f"echo 正在安装 {package_spec}... && "
+                f"{install_cmd} && "
+                f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
+                f"timeout /t 5"
+            )
+
+            self.master.after(0, lambda: self.package_status_var.set("安装已启动，请查看命令行窗口"))
+
+            if platform.system() == "Windows":
+                subprocess.Popen(f"start cmd /C \"{command}\"", shell=True)
+            else:
+                if platform.system() == "Darwin":
+                    mac_command = command.replace("timeout /t 5", "sleep 5")
+                    subprocess.Popen(["osascript", "-e", f'tell app "Terminal" to do script "{mac_command}"'])
+                else:
+                    linux_command = command.replace("timeout /t 5", "sleep 5")
+                    for terminal in ["gnome-terminal", "konsole", "xterm"]:
+                        try:
+                            subprocess.Popen([terminal, "-e", f"bash -c '{linux_command}; read -n1'"])
+                            break
+                        except FileNotFoundError:
+                            continue
+
+            self.master.after(3000, lambda: self.package_status_var.set(f"已完成安装 {package_spec}"))
+
+        except Exception as e:
+            logger.error(f"安装Python包出错: {e}")
+            self.master.after(0, lambda: self.package_status_var.set(f"安装失败: {str(e)}"))
+            self.master.after(0, lambda: messagebox.showerror("安装错误", f"安装Python包失败：\n{str(e)}"))
 
     def _refresh_model_list(self):
         res_dir = resource_path("res")
@@ -837,18 +937,18 @@ fi
     def _apply_selected_model(self):
         model_name = self.model_selection_var.get()
         if not model_name:
-            messagebox.showinfo("提示", "请先选择一个模型")
+            messagebox.showinfo("提示", "请先选择一个模型", parent=self.master)
             return
         model_path = resource_path(os.path.join("res", model_name))
         if not os.path.exists(model_path):
-            messagebox.showerror("错误", f"模型文件不存在: {model_path}")
+            messagebox.showerror("错误", f"模型文件不存在: {model_path}", parent=self.master)
             return
         current_model = os.path.basename(self.controller.image_processor.model_path) if hasattr(
             self.controller.image_processor, 'model_path') and self.controller.image_processor.model_path else None
         if model_name == current_model:
-            messagebox.showinfo("提示", f"模型 {model_name} 已经加载")
+            messagebox.showinfo("提示", f"模型 {model_name} 已经加载", parent=self.master)
             return
-        if not messagebox.askyesno("确认", f"确定要切换到模型 {model_name} 吗？"):
+        if not messagebox.askyesno("确认", f"确定要切换到模型 {model_name} 吗？", parent=self.master):
             return
         self.model_status_var.set("正在加载...")
         self.master.update_idletasks()
@@ -859,14 +959,20 @@ fi
             self.controller.image_processor.load_model(model_path)
             self.master.after(0, lambda: self.current_model_var.set(model_name))
             self.master.after(0, lambda: self.model_status_var.set("已加载"))
-            self.master.after(0, lambda: messagebox.showinfo("成功", f"模型 {model_name} 已成功加载"))
+            self.master.after(0,
+                              lambda: messagebox.showinfo("成功", f"模型 {model_name} 已成功加载", parent=self.master))
         except Exception as e:
             logger.error(f"加载模型失败: {e}")
             self.master.after(0, lambda: self.model_status_var.set(f"加载失败: {str(e)}"))
-            self.master.after(0, lambda: messagebox.showerror("错误", f"加载模型失败: {e}"))
+            self.master.after(0, lambda: messagebox.showerror("错误", f"加载模型失败: {e}", parent=self.master))
 
     def _on_tab_changed(self, event):
-        current_tab = self.advanced_notebook.select()
-        tab_text = self.advanced_notebook.tab(current_tab, "text")
-        if tab_text == "环境维护" and hasattr(self, 'env_canvas'):
-            self.master.after(10, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
+        current_tab_index = self.advanced_notebook.index(self.advanced_notebook.select())
+        if current_tab_index == 1:  # Env Maintenance
+            if hasattr(self, 'env_canvas'):
+                self.master.after(10, lambda: self.env_canvas.configure(scrollregion=self.env_canvas.bbox("all")))
+        elif current_tab_index == 2:  # Software Settings
+            if hasattr(self, 'software_canvas'):
+                self.master.after(10,
+                                  lambda: self.software_canvas.configure(scrollregion=self.software_canvas.bbox("all")))
+                self.update_cache_size()
