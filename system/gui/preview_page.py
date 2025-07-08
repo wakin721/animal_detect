@@ -13,6 +13,8 @@ from system.config import NORMAL_FONT, SUPPORTED_IMAGE_EXTENSIONS
 logger = logging.getLogger(__name__)
 
 
+# In system/gui/preview_page.py
+
 class PreviewPage(ttk.Frame):
     """图像预览和校验页面"""
 
@@ -24,6 +26,7 @@ class PreviewPage(ttk.Frame):
         self.current_image_path = None
         self.current_detection_results = None
         self.active_keybinds = []
+        self._is_navigating = False  # <--- 添加这一行
 
         self._create_widgets()
         self.rebind_keys()
@@ -167,12 +170,13 @@ class PreviewPage(ttk.Frame):
 
     def rebind_keys(self):
         """Unbinds old keys and binds new, case-insensitive keys."""
-        # 1. Unbind all previously bound keys
+        # 1. 解绑所有先前绑定的按键
         for key_sequence in self.active_keybinds:
             self.controller.master.unbind(key_sequence)
+            self.validation_listbox.unbind(key_sequence) # 同时解绑列表框上的按键
         self.active_keybinds = []
 
-        # 2. Get new key definitions
+        # 2. 获取新的按键定义
         key_map = {
             "up": (self.controller.advanced_page.key_up_var.get(), self._select_prev_image),
             "down": (self.controller.advanced_page.key_down_var.get(), self._select_next_image),
@@ -181,10 +185,10 @@ class PreviewPage(ttk.Frame):
             self.controller.advanced_page.key_incorrect_var.get(), lambda e: self._mark_validation(False)),
         }
 
-        # 3. Bind new keys and store them
+        # 3. 根据按键功能，在不同层级上进行绑定
         for action, (key_def, command) in key_map.items():
             sequences_to_bind = []
-            # Check for standard Tkinter key format like <Key-a> or <Up>
+            # (处理大小写和特殊按键的逻辑保持不变)
             match = re.fullmatch(r"<Key-([a-zA-Z0-9])>", key_def)
             if match:
                 key_char = match.group(1)
@@ -192,48 +196,70 @@ class PreviewPage(ttk.Frame):
                     sequences_to_bind.append(f"<Key-{key_char.lower()}>")
                     sequences_to_bind.append(f"<Key-{key_char.upper()}>")
                 else:
-                    sequences_to_bind.append(key_def)  # for numbers like <Key-1>
-            elif len(key_def) == 1 and key_def.isalpha():  # Handle raw single letters like 'a'
+                    sequences_to_bind.append(key_def)
+            elif len(key_def) == 1 and key_def.isalpha():
                 sequences_to_bind.append(f"<Key-{key_def.lower()}>")
                 sequences_to_bind.append(f"<Key-{key_def.upper()}>")
-            else:  # Assume it's a special key like <Up>
+            else:
                 sequences_to_bind.append(key_def)
 
             for seq in sequences_to_bind:
                 if seq not in self.active_keybinds:
-                    self.controller.master.bind(seq, command)
+                    # **核心修改：根据功能决定绑定目标**
+                    if action in ["up", "down"]:
+                        # 导航键绑定在列表框上
+                        self.validation_listbox.bind(seq, command)
+                    else:
+                        # 功能键绑定在全局窗口上
+                        self.controller.master.bind(seq, command)
                     self.active_keybinds.append(seq)
 
     def _select_prev_image(self, event=None):
         """Selects the previous image in the validation listbox."""
+        if self._is_navigating:
+            return "break"
+
         if not self.validation_listbox.curselection():
-            return
+            return "break"
+
         current_index = self.validation_listbox.curselection()[0]
         if current_index > 0:
+            self._is_navigating = True
             next_index = current_index - 1
             self.validation_listbox.selection_clear(0, tk.END)
             self.validation_listbox.selection_set(next_index)
             self.validation_listbox.see(next_index)
-            self._on_validation_file_selected(None)
+            self.validation_listbox.event_generate("<<ListboxSelect>>")
+            self.master.after(100, lambda: setattr(self, '_is_navigating', False))
+
+        return "break"  # <-- 确保此行存在
 
     def _select_next_image(self, event=None):
         """Selects the next image in the validation listbox."""
+        if self._is_navigating:
+            return "break"
+
         if not self.validation_listbox.curselection():
-            return
+            return "break"
+
         current_index = self.validation_listbox.curselection()[0]
         if current_index < self.validation_listbox.size() - 1:
+            self._is_navigating = True
             next_index = current_index + 1
             self.validation_listbox.selection_clear(0, tk.END)
             self.validation_listbox.selection_set(next_index)
             self.validation_listbox.see(next_index)
-            self._on_validation_file_selected(None)
+            self.validation_listbox.event_generate("<<ListboxSelect>>")
+            self.master.after(100, lambda: setattr(self, '_is_navigating', False))
+
+        return "break"  # <-- 确保此行存在
 
     def _on_preview_tab_changed(self, event):
         selected_tab = self.preview_notebook.select()
         tab_text = self.preview_notebook.tab(selected_tab, "text")
         if tab_text == "检查校验":
             self._load_processed_images()
-            self.validation_tab.focus_set()  # Set focus to handle key events
+            self.validation_listbox.focus_set()  # <-- 将焦点直接设置在列表框上
             self.rebind_keys()
 
     def update_file_list(self, directory: str):
@@ -489,8 +515,11 @@ class PreviewPage(ttk.Frame):
         self._save_validation_data()
         self._update_validation_progress()
 
-        # Automatically move to the next image
+        # 自动跳转到下一张图片
         self._select_next_image()
+
+        # 在所有操作完成后，将焦点交还给列表框
+        self.validation_listbox.focus_set()
 
     def _update_validation_progress(self):
         total = self.validation_listbox.size()

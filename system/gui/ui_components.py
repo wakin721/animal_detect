@@ -402,14 +402,19 @@ class SpeedProgressBar(ttk.Frame):
             self.speed_text = f"速度: {speed:.2f} 张/秒"
 
         if remaining_time is not None:
-            if remaining_time == float('inf') or remaining_time > 3600 * 24:  # Avoid huge numbers
-                self.time_text = "剩余: 计算中"
-            elif remaining_time > 60:
-                minutes = int(remaining_time // 60)
-                seconds = int(remaining_time % 60)
-                self.time_text = f"剩余: {minutes}分{seconds}秒"
+            # 检查 remaining_time 在比较前是否为数字
+            if isinstance(remaining_time, (int, float)):
+                if remaining_time == float('inf') or remaining_time > 3600 * 24:  # 避免过大的数字
+                    self.time_text = "剩余: 计算中"
+                elif remaining_time > 60:
+                    minutes = int(remaining_time // 60)
+                    seconds = int(remaining_time % 60)
+                    self.time_text = f"剩余: {minutes}分{seconds}秒"
+                else:
+                    self.time_text = f"剩余: {int(remaining_time)}秒"
             else:
-                self.time_text = f"剩余: {int(remaining_time)}秒"
+                # 如果是字符串 (例如 "已完成"), 直接显示
+                self.time_text = f"剩余: {remaining_time}"
 
         self._draw_progressbar()
         self.update_idletasks()
