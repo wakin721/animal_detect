@@ -1,7 +1,7 @@
 # system/update_checker.py
 
 import requests
-import re
+import re  # 确保导入 re 模块
 import os
 import zipfile
 import io
@@ -31,21 +31,35 @@ def get_icon_path():
 def parse_version(version_string):
     """
     解析版本字符串，返回用于比较的元组。
-    支持格式：major.minor.patch-prerelease
+    支持格式: major.minor.patch-prerelease[number] (例如: 1.2.3-beta1)
     """
     prerelease_priority = {'alpha': 1, 'beta': 2, 'rc': 3, 'release': 4}
 
+    prerelease_part = 'release'
+    prerelease_num = 0
+
     if '-' in version_string:
-        main_version, prerelease = version_string.split('-', 1)
+        main_version, prerelease_full = version_string.split('-', 1)
+        # 使用正则表达式从预发布字符串中分离出字母和数字
+        match = re.match(r"([a-zA-Z]+)(\d*)", prerelease_full)
+        if match:
+            prerelease_part = match.group(1).lower()
+            if match.group(2):
+                prerelease_num = int(match.group(2))
+        else:
+            prerelease_part = prerelease_full.lower()
+
     else:
         main_version = version_string
-        prerelease = 'release'
+        prerelease_part = 'release'
 
     try:
         version_parts = list(map(int, main_version.split('.')))
-        prerelease_value = prerelease_priority.get(prerelease.lower(), 0)
-        return tuple(version_parts + [prerelease_value])
+        prerelease_value = prerelease_priority.get(prerelease_part, 0)
+        # 将预发布版本号添加到元组中进行比较
+        return tuple(version_parts + [prerelease_value, prerelease_num])
     except ValueError:
+        # Fallback for non-standard version strings
         return (0,)
 
 
@@ -248,7 +262,7 @@ def perform_download(parent_window, download_url):
                         # 这能正确地模拟用户双击应用程序的效果, 弹出命令行并在之后自动关闭。
                         cmd = ' '.join(f'"{arg}"' for arg in args)
                         subprocess.Popen(f'start "Restarting Application" {cmd}', shell=True)
-                    elif platform.system() == "Darwin": # macOS
+                    elif platform.system() == "Darwin":  # macOS
                         # 在macOS上，使用AppleScript在新Terminal窗口中运行命令。
                         cmd = ' '.join(f'"{arg}"' for arg in args)
                         mac_cmd = cmd.replace("\"", "\\\"")
@@ -256,7 +270,7 @@ def perform_download(parent_window, download_url):
                             ["osascript", "-e", f'tell app "Terminal" to do script "{mac_cmd}"'],
                             close_fds=True
                         )
-                    else: # Linux
+                    else:  # Linux
                         # 在Linux上，尝试在新的终端模拟器中启动。
                         terminal_found = False
                         for terminal in ["gnome-terminal", "konsole", "xterm"]:
@@ -273,15 +287,15 @@ def perform_download(parent_window, download_url):
                                 continue
                         if not terminal_found:
                             # 如果找不到终端，则显示消息提示用户手动重启
-                             _show_messagebox(parent_window, "重启提示", "无法自动打开新终端，请手动重启程序以应用更新。", "info")
+                            _show_messagebox(parent_window, "重启提示", "无法自动打开新终端，请手动重启程序以应用更新。",
+                                             "info")
 
                     # 关闭当前的应用程序实例
                     parent_window.destroy()
                     sys.exit()
-                
+
                 except Exception as e:
                     _show_messagebox(parent_window, "重启失败", f"无法重新启动应用程序: {e}", "error")
-
 
         parent_window.after(0, ask_restart)
 
