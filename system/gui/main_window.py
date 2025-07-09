@@ -12,7 +12,6 @@ import gc
 import sv_ttk
 import hashlib
 import shutil
-# --- 新增的导入 ---
 from PIL import Image, ImageTk
 
 from system.config import APP_TITLE, APP_VERSION, SUPPORTED_IMAGE_EXTENSIONS
@@ -55,16 +54,29 @@ class ObjectDetectionGUI:
         self.excel_data = []
         self.current_page = "settings"
         self.update_channel_var = tk.StringVar(value="稳定版 (Release)")
+        self.model_var = tk.StringVar()  # <<< 新增：用于跟踪所选模型的变量
 
         self._apply_system_theme()
         self._setup_window()
-        self._initialize_model()
+        self._initialize_model(settings)
         self._setup_styles()
         self._create_ui_elements()
         self._bind_events()
 
         if self.settings:
             self._load_settings_to_ui(self.settings)
+        else:
+            # 如果没有找到配置文件，则立即用默认值创建一个
+            logging.info("未找到配置文件，正在使用默认值创建 'setting.json'。")
+            # 1. 从UI控件获取所有默认设置
+            default_settings = self._get_current_settings()
+            # 2. 保存这些默认设置到文件
+            self.settings_manager.save_settings(default_settings)
+            # 3. 将新创建的默认设置赋给当前实例，以确保程序后续部分能正常运行
+            self.settings = default_settings
+            # 4. (可选) 加载新创建的默认主题
+            if hasattr(self, 'advanced_page'):
+                self.change_theme()
 
         # 确保UI完全加载后再执行启动检查
         self._check_for_updates(silent=True)
@@ -256,7 +268,7 @@ class ObjectDetectionGUI:
         self.master.geometry(f"{width}x{height}+{x}+{y}")
         self.master.minsize(width, height)
 
-        # --- 修改部分：设置任务栏和窗口图标 ---
+        # --- 设置任务栏和窗口图标 ---
         try:
             ico_path = resource_path("res/ico.ico")
             # 使用更可靠的 iconphoto 方法
@@ -270,16 +282,40 @@ class ObjectDetectionGUI:
                 self.master.iconbitmap(ico_path)
             except Exception as e2:
                 logger.warning(f"备用图标加载方法也失败: {e2}")
-        # --- 修改结束 ---
 
-    def _initialize_model(self):
-        model_path = self._find_model_file()
+    def _initialize_model(self, settings: dict):
+        """根据设置初始化模型，优先加载已保存的模型。"""
+        saved_model_name = settings.get("selected_model") if settings else None
+        model_path = None
+        res_dir = resource_path("res")
+
+        # 1. 尝试从设置中加载模型
+        if saved_model_name:
+            potential_path = os.path.join(res_dir, saved_model_name)
+            if os.path.exists(potential_path):
+                model_path = potential_path
+                logger.info(f"从设置加载模型: {saved_model_name}")
+            else:
+                logger.warning(f"设置中保存的模型文件不存在: {saved_model_name}。将尝试加载默认模型。")
+
+        # 2. 如果设置中没有模型或文件不存在，则查找第一个可用的模型作为后备
+        if not model_path:
+            model_path = self._find_model_file()  # 此方法会查找第一个.pt文件
+            if model_path:
+                logger.info(f"加载找到的第一个模型: {os.path.basename(model_path)}")
+
+        # 3. 初始化 ImageProcessor
         self.image_processor = ImageProcessor(model_path)
         if model_path:
             self.image_processor.model_path = model_path
+            # 更新 model_var，以便UI（如下拉框）能同步显示正确的模型名称
+            self.model_var.set(os.path.basename(model_path))
         else:
+            # 处理未找到任何模型文件的情况
             self.image_processor.model = None
             self.image_processor.model_path = None
+            self.model_var.set("")
+            logger.error("在 res 目录中未找到任何有效的模型文件 (.pt)。")
 
     def _find_model_file(self) -> str or None:
         try:
@@ -419,9 +455,12 @@ class ObjectDetectionGUI:
                 "key_down": self.advanced_page.key_down_var.get(),
                 "key_correct": self.advanced_page.key_correct_var.get(),
                 "key_incorrect": self.advanced_page.key_incorrect_var.get(),
-                "theme": self.advanced_page.theme_var.get()}
+                "theme": self.advanced_page.theme_var.get(),
+                "selected_model": self.model_var.get()}  # <<< 修改：添加选择的模型
 
     def _load_settings_to_ui(self, settings: dict):
+        if not settings:
+            return
         try:
             if "file_path" in settings and settings["file_path"] and os.path.exists(settings["file_path"]):
                 self.start_page.file_path_entry.delete(0, tk.END)
@@ -453,6 +492,21 @@ class ObjectDetectionGUI:
             # Load theme
             self.advanced_page.theme_var.set(settings.get("theme", "自动"))
             self.change_theme()
+
+            '''# <<< 新增：加载并应用模型选择 >>>
+            saved_model = settings.get("selected_model", "")
+            available_models = self.advanced_page.model_combobox.cget('values')
+
+            # 检查保存的模型是否存在于可用模型列表中
+            if saved_model and saved_model in available_models:
+                self.model_var.set(saved_model)
+            elif available_models:
+                # 如果没有保存的模型或模型文件已不存在，则默认选择列表中的第一个
+                self.model_var.set(available_models[0])
+
+            # 手动调用模型更改处理函数，以确保后端ImageProcessor使用正确的模型
+            #self.advanced_page._change_model()
+            # <<< 新增结束 >>>'''
 
         except Exception as e:
             logger.error(f"加载设置到UI失败: {e}")

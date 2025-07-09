@@ -552,19 +552,12 @@ class AdvancedPage(ttk.Frame):
 
         options_frame = ttk.Frame(self.pytorch_panel.content_padding)
         options_frame.pack(fill="x", pady=10)
-        self.force_reinstall_var = tk.BooleanVar(value=False)
-        force_reinstall_switch = ttk.Checkbutton(
-            options_frame,
-            text="强制重装PyTorch",
-            variable=self.force_reinstall_var
-        )
-        force_reinstall_switch.pack(anchor="w")
         ttk.Label(
             options_frame,
-            text="勾选后将先卸载现有的torch、torchvision、torchaudio模块再重新安装",
+            text="将先卸载现有的torch、torchvision、torchaudio模块再重新安装",
             foreground="#666666",
             font=("Segoe UI", 8)
-        ).pack(anchor="w", padx=(20, 0))
+        ).pack(anchor="w", padx=(0, 0))
 
         bottom_frame = ttk.Frame(self.pytorch_panel.content_padding)
         bottom_frame.pack(fill="x", pady=(10, 0))
@@ -602,10 +595,10 @@ class AdvancedPage(ttk.Frame):
         )
         current_model_entry.pack(fill="x", expand=True, pady=(0, 10))
         ttk.Label(model_selection_frame, text="选择可用模型").pack(anchor="w", pady=(0, 5))
-        self.model_selection_var = tk.StringVar()
+        #self.model_selection_var = tk.StringVar()
         self.model_combobox = ttk.Combobox(
             model_selection_frame,
-            textvariable=self.model_selection_var,
+            textvariable=self.controller.model_var,
             state="readonly",
             style="Dropdown.TCombobox"
         )
@@ -786,14 +779,14 @@ class AdvancedPage(ttk.Frame):
         """安装PyTorch"""
         version = self.pytorch_version_var.get()
         if not version:
-            messagebox.showerror("错误", "请选择PyTorch版本")
+            messagebox.showerror("错误", "请选择PyTorch版本", parent=self.master)
             return
 
-        message = f"将安装 PyTorch {version}"
-        if self.force_reinstall_var.get():
-            message += "，将先卸载现有安装"
+        # 构建确认信息，明确告知用户将先卸载
+        message = f"将安装 PyTorch {version}。\n\n此操作会强制卸载任何现有版本，是否继续？"
 
-        if not messagebox.askyesno("确认安装", message + "\n\n是否继续？"):
+        # 弹出确认对话框
+        if not messagebox.askyesno("确认安装", message, parent=self.master):
             return
 
         is_cuda = "CPU" not in version
@@ -807,7 +800,7 @@ class AdvancedPage(ttk.Frame):
         if pytorch_match:
             pytorch_version = pytorch_match.group(1)
         else:
-            messagebox.showerror("错误", "无法解析PyTorch版本")
+            messagebox.showerror("错误", "无法解析PyTorch版本", parent=self.master)
             return
 
         self.install_button.configure(state="disabled")
@@ -844,7 +837,6 @@ class AdvancedPage(ttk.Frame):
         try:
             self.master.after(0, lambda: self.pytorch_status_var.set("正在启动安装..."))
 
-            # --- 修改代码：获取命令前缀 ---
             pip_command_prefix = self._get_python_command_prefix()
 
             if cuda_version:
@@ -854,22 +846,17 @@ class AdvancedPage(ttk.Frame):
             else:
                 install_cmd = f"{pip_command_prefix} install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
 
-            if self.force_reinstall_var.get():
-                command = (
-                    f"echo 正在卸载现有PyTorch... && "
-                    f"{pip_command_prefix} uninstall -y torch torchvision torchaudio && "
-                    f"echo 卸载完成，开始安装新版本... && "
-                    f"{install_cmd} && "
-                    f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
-                    f"timeout /t 5"
-                )
-            else:
-                command = (
-                    f"echo 正在安装PyTorch {pytorch_version}... && "
-                    f"{install_cmd} && "
-                    f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
-                    f"timeout /t 5"
-                )
+            # --- 修改开始 ---
+            # 强制执行卸载命令
+            command = (
+                f"echo 正在卸载现有PyTorch... && "
+                f"{pip_command_prefix} uninstall -y torch torchvision torchaudio && "
+                f"echo 卸载完成，开始安装新版本... && "
+                f"{install_cmd} && "
+                f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
+                f"timeout /t 5"
+            )
+            # --- 修改结束 ---
 
             self.master.after(0, lambda: self.pytorch_status_var.set("安装已启动，请查看命令行窗口"))
 
@@ -908,6 +895,7 @@ class AdvancedPage(ttk.Frame):
             self.master.after(0, lambda: self.pytorch_status_var.set(f"安装失败: {str(e)}"))
             self.master.after(0, lambda: self.install_button.configure(state="normal"))
             self.master.after(0, lambda: messagebox.showerror("安装错误", f"安装PyTorch失败：\n{str(e)}"))
+
 
     def _install_python_package(self) -> None:
         """安装Python包"""
@@ -975,20 +963,16 @@ class AdvancedPage(ttk.Frame):
             self.master.after(0, lambda: messagebox.showerror("安装错误", f"安装Python包失败：\n{str(e)}"))
 
     def _refresh_model_list(self):
+        """刷新可用模型列表。"""
         res_dir = resource_path("res")
         try:
-            self.model_combobox["values"] = []
+            self.model_combobox["values"] = []  # 清空旧列表
             if os.path.exists(res_dir):
+                # 查找所有.pt模型文件
                 model_files = [f for f in os.listdir(res_dir) if f.lower().endswith('.pt')]
                 if model_files:
                     model_files.sort()
                     self.model_combobox["values"] = model_files
-                    self.model_combobox.current(0)
-                    current_model = os.path.basename(self.controller.image_processor.model_path) if hasattr(
-                        self.controller.image_processor,
-                        'model_path') and self.controller.image_processor.model_path else None
-                    if current_model in model_files:
-                        self.model_combobox.set(current_model)
                     self.model_status_var.set(f"找到 {len(model_files)} 个模型文件")
                 else:
                     self.model_status_var.set("未找到任何模型文件")
@@ -999,30 +983,49 @@ class AdvancedPage(ttk.Frame):
             self.model_status_var.set(f"刷新失败: {str(e)}")
 
     def _apply_selected_model(self):
-        model_name = self.model_selection_var.get()
+        """应用用户在下拉框中选择的模型"""
+        model_name = self.controller.model_var.get()
         if not model_name:
             messagebox.showinfo("提示", "请先选择一个模型", parent=self.master)
             return
+
         model_path = resource_path(os.path.join("res", model_name))
         if not os.path.exists(model_path):
             messagebox.showerror("错误", f"模型文件不存在: {model_path}", parent=self.master)
             return
+
+        # 获取当前正在使用的模型的文件名
         current_model = os.path.basename(self.controller.image_processor.model_path) if hasattr(
             self.controller.image_processor, 'model_path') and self.controller.image_processor.model_path else None
+
+        # 如果选择的模型与当前模型相同，则不执行任何操作
         if model_name == current_model:
             messagebox.showinfo("提示", f"模型 {model_name} 已经加载", parent=self.master)
             return
+
+        # 弹出确认框
         if not messagebox.askyesno("确认", f"确定要切换到模型 {model_name} 吗？", parent=self.master):
             return
+
         self.model_status_var.set("正在加载...")
         self.master.update_idletasks()
+
+        # 在后台线程中加载模型，防止UI卡顿
         threading.Thread(target=self._load_model_thread, args=(model_path, model_name), daemon=True).start()
 
     def _load_model_thread(self, model_path, model_name):
+        """在后台线程中执行模型加载"""
         try:
+            # 调用image_processor中的加载函数
             self.controller.image_processor.load_model(model_path)
+
+            # 使用master.after确保UI更新在主线程中执行
             self.master.after(0, lambda: self.current_model_var.set(model_name))
             self.master.after(0, lambda: self.model_status_var.set("已加载"))
+
+            # 保存新的模型选择到settings.json
+            self.master.after(0, self.controller._save_current_settings)
+
             self.master.after(0,
                               lambda: messagebox.showinfo("成功", f"模型 {model_name} 已成功加载", parent=self.master))
         except Exception as e:
