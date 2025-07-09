@@ -261,8 +261,8 @@ class ObjectDetectionGUI:
             ico_path = resource_path("res/ico.ico")
             # 使用更可靠的 iconphoto 方法
             icon_image = Image.open(ico_path)
-            photo = ImageTk.PhotoImage(icon_image)
-            self.master.iconphoto(True, photo)
+            self.app_icon = ImageTk.PhotoImage(icon_image)
+            self.master.iconphoto(True, self.app_icon)
         except Exception as e:
             logger.warning(f"无法加载窗口图标: {e}")
             # 如果新方法失败，尝试旧方法

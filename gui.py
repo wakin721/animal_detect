@@ -41,6 +41,9 @@ from system.update_checker import check_for_updates
 
 def main():
     """程序入口点"""
+    root = tk.Tk()
+    root.withdraw()
+
     def check_cuda_available():
         try:
             import torch
@@ -50,10 +53,7 @@ def main():
 
     cuda_available = check_cuda_available()
     if not cuda_available:
-        temp_root = tk.Tk()
-        temp_root.withdraw()
-        messagebox.showwarning("CUDA检测", "未检测到CUDA/Rocm，请检查是否正确安装对应PyTorch版本。")
-        temp_root.destroy()
+        messagebox.showwarning("CUDA检测", "未检测到CUDA/Rocm，请检查是否正确安装对应PyTorch版本。", parent=root)
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     settings_manager = SettingsManager(base_dir)
@@ -68,23 +68,20 @@ def main():
             with open(cache_file, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
             if cache_data:
-                 temp_root = tk.Tk()
-                 temp_root.withdraw()
                  resume_processing = messagebox.askyesno(
                     "发现未完成任务",
-                    "检测到上次有未完成的处理任务，是否从上次进度继续处理？"
+                    "检测到上次有未完成的处理任务，是否从上次进度继续处理？",
+                    parent=root
                  )
                  if not resume_processing:
                      os.remove(cache_file)
                      cache_data = None
-                 temp_root.destroy()
         except Exception as e:
             logger.error(f"读取缓存文件失败: {e}")
             cache_data = None
 
 
     # 创建主窗口
-    root = tk.Tk()
     app = ObjectDetectionGUI(
         master=root,
         settings_manager=settings_manager,
@@ -93,7 +90,8 @@ def main():
         cache_data=cache_data
         )
 
-    # 启动主循环
+    # 显示窗口并启动主循环
+    root.deiconify()
     root.mainloop()
 
 if __name__ == "__main__":
