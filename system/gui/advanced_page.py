@@ -823,22 +823,41 @@ class AdvancedPage(ttk.Frame):
 
         threading.Thread(target=install_thread, daemon=True).start()
 
+    def _get_python_command_prefix(self):
+        """获取用于调用pip的python.exe命令前缀"""
+        # --- 新增代码：动态获取python.exe路径 ---
+        program_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        python_exe_path = os.path.join(program_root_dir, "toolkit", "python.exe")
+
+        if not os.path.exists(python_exe_path):
+            print(f"警告: 未在 {program_root_dir}\\toolkit 找到 python.exe, 将回退到默认python。")
+            # 在命令行中，直接用python可能无法找到正确的解释器，所以这里给出更明确的sys.executable
+            # 并用引号包裹以处理路径中的空格
+            return f'"{sys.executable}" -m pip'
+        else:
+            # 返回带引号的完整路径，准备在命令行中使用
+            return f'"{python_exe_path}" -m pip'
+        # --- 代码修改结束 ---
+
     def _run_pytorch_install(self, pytorch_version, cuda_version=None):
         """使用弹出命令行窗口安装PyTorch"""
         try:
             self.master.after(0, lambda: self.pytorch_status_var.set("正在启动安装..."))
 
+            # --- 修改代码：获取命令前缀 ---
+            pip_command_prefix = self._get_python_command_prefix()
+
             if cuda_version:
                 cuda_str_map = {"11.8": "cu118", "12.1": "cu121", "12.6": "cu126", "12.8": "cu128"}
                 cuda_str = cuda_str_map.get(cuda_version, f"cu{cuda_version.replace('.', '')}")
-                install_cmd = f"pip install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/{cuda_str}"
+                install_cmd = f"{pip_command_prefix} install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/{cuda_str}"
             else:
-                install_cmd = f"pip install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
+                install_cmd = f"{pip_command_prefix} install torch=={pytorch_version} torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu"
 
             if self.force_reinstall_var.get():
                 command = (
                     f"echo 正在卸载现有PyTorch... && "
-                    f"pip uninstall -y torch torchvision torchaudio && "
+                    f"{pip_command_prefix} uninstall -y torch torchvision torchaudio && "
                     f"echo 卸载完成，开始安装新版本... && "
                     f"{install_cmd} && "
                     f"echo. && echo 安装完成！窗口将在5秒后自动关闭... && "
@@ -920,7 +939,10 @@ class AdvancedPage(ttk.Frame):
         try:
             self.master.after(0, lambda: self.package_status_var.set("正在启动安装..."))
 
-            install_cmd = f"pip install {package_spec}"
+            # --- 修改代码：获取命令前缀 ---
+            pip_command_prefix = self._get_python_command_prefix()
+
+            install_cmd = f"{pip_command_prefix} install {package_spec}"
             command = (
                 f"echo 正在安装 {package_spec}... && "
                 f"{install_cmd} && "

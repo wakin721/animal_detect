@@ -12,6 +12,8 @@ import gc
 import sv_ttk
 import hashlib
 import shutil
+# --- 新增的导入 ---
+from PIL import Image, ImageTk
 
 from system.config import APP_TITLE, APP_VERSION, SUPPORTED_IMAGE_EXTENSIONS
 from system.utils import resource_path
@@ -190,7 +192,6 @@ class ObjectDetectionGUI:
         self._update_ui_theme()
         self._save_current_settings()
 
-
     def _apply_system_theme(self):
         try:
             import darkdetect
@@ -237,7 +238,6 @@ class ObjectDetectionGUI:
             logger.warning(f"检查主题变化失败: {e}")
         self.master.after(10000, self._check_theme_change)
 
-
     def _update_ui_theme(self):
         self.sidebar.update_theme()
         if hasattr(self, 'start_page') and hasattr(self.start_page, 'update_theme'):
@@ -245,7 +245,6 @@ class ObjectDetectionGUI:
         if hasattr(self, 'advanced_page') and hasattr(self.advanced_page, 'update_theme'):
             self.advanced_page.update_theme()
         self._show_page(self.current_page)
-
 
     def _setup_window(self):
         self.master.title(APP_TITLE)
@@ -256,11 +255,22 @@ class ObjectDetectionGUI:
         y = (screen_height - height) // 2
         self.master.geometry(f"{width}x{height}+{x}+{y}")
         self.master.minsize(width, height)
+
+        # --- 修改部分：设置任务栏和窗口图标 ---
         try:
             ico_path = resource_path("res/ico.ico")
-            self.master.iconbitmap(ico_path)
+            # 使用更可靠的 iconphoto 方法
+            icon_image = Image.open(ico_path)
+            photo = ImageTk.PhotoImage(icon_image)
+            self.master.iconphoto(True, photo)
         except Exception as e:
             logger.warning(f"无法加载窗口图标: {e}")
+            # 如果新方法失败，尝试旧方法
+            try:
+                self.master.iconbitmap(ico_path)
+            except Exception as e2:
+                logger.warning(f"备用图标加载方法也失败: {e2}")
+        # --- 修改结束 ---
 
     def _initialize_model(self):
         model_path = self._find_model_file()
