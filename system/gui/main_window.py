@@ -463,6 +463,9 @@ class ObjectDetectionGUI:
             return
         try:
             if "file_path" in settings and settings["file_path"] and os.path.exists(settings["file_path"]):
+                if hasattr(self, 'preview_page') and hasattr(self.preview_page, 'file_listbox'):
+                    self.preview_page.file_listbox.delete(0, tk.END)
+
                 self.start_page.file_path_entry.delete(0, tk.END)
                 self.start_page.file_path_entry.insert(0, settings["file_path"])
                 self.get_temp_photo_dir(update=True)
@@ -474,8 +477,12 @@ class ObjectDetectionGUI:
             self.start_page.output_excel_var.set(settings.get("output_excel", True))
             self.start_page.copy_img_var.set(settings.get("copy_img", False))
             self.advanced_page.controller.use_fp16_var.set(settings.get("use_fp16", False))
-            self.advanced_page.controller.iou_var.set(settings.get("iou", 0.3))
-            self.advanced_page.controller.conf_var.set(settings.get("conf", 0.25))
+            iou_value = settings.get("iou", 0.3)
+            conf_value = settings.get("conf", 0.25)
+            self.advanced_page.controller.iou_var.set(iou_value)
+            self.advanced_page.controller.conf_var.set(conf_value)
+            self.advanced_page._update_iou_label(iou_value)
+            self.advanced_page._update_conf_label(conf_value)
             self.advanced_page.controller.use_augment_var.set(settings.get("use_augment", True))
             self.advanced_page.controller.use_agnostic_nms_var.set(settings.get("use_agnostic_nms", True))
             self.advanced_page._update_iou_label(settings.get("iou", 0.3))
@@ -673,6 +680,7 @@ class ObjectDetectionGUI:
         self._show_page("preview")
         if resume_from == 0:
             self.excel_data = []
+            self._clear_current_validation_file()
 
         threading.Thread(
             target=self._process_images_thread,
@@ -765,7 +773,8 @@ class ObjectDetectionGUI:
                 processed_files += 1
                 if processed_files % 10 == 0: self._save_processing_cache(excel_data, file_path, save_path,
                                                                           save_detect_image, output_excel, copy_img,
-                                                                          use_fp16, processed_files, total_files)
+                                                                          use_fp16, processed_files, total_files,
+                                                                          iou, conf, augment, agnostic_nms)
                 try:
                     del img_path, image_info, img, species_info, detect_results
                 except NameError:
@@ -834,7 +843,7 @@ class ObjectDetectionGUI:
                     messagebox.showerror("错误", f"无法打开文件: {e}")
 
     def _save_processing_cache(self, excel_data, file_path, save_path, save_detect_image, output_excel, copy_img,
-                               use_fp16, processed_files, total_files):
+                               use_fp16, processed_files, total_files, iou, conf, use_augment, use_agnostic_nms):
         def make_serializable(obj):
             if isinstance(obj, datetime): return obj.isoformat()
             if isinstance(obj, dict): return {k: make_serializable(v) for k, v in obj.items() if k != 'detect_results'}
@@ -846,7 +855,11 @@ class ObjectDetectionGUI:
         cache_data = {'file_path': file_path, 'save_path': save_path, 'save_detect_image': save_detect_image,
                       'output_excel': output_excel, 'copy_img': copy_img, 'use_fp16': use_fp16,
                       'processed_files': processed_files, 'total_files': total_files,
-                      'excel_data': serializable_excel_data}
+                      'excel_data': serializable_excel_data,
+                      'iou': iou,
+                      'conf': conf,
+                      'use_augment': use_augment,
+                      'use_agnostic_nms': use_agnostic_nms}
         cache_file = os.path.join(self.settings_manager.settings_dir, "cache.json")
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:
@@ -871,3 +884,18 @@ class ObjectDetectionGUI:
     def _resume_processing(self):
         self._load_cache_data_from_file(self.cache_data)
         self.start_processing(resume_from=self.cache_data.get('processed_files', 0))
+
+    def _clear_current_validation_file(self):
+        """删除当前所选文件夹的validation.json文件。"""
+        temp_photo_dir = self.get_temp_photo_dir()
+        if temp_photo_dir:
+            validation_file_path = os.path.join(temp_photo_dir, "validation.json")
+            if os.path.exists(validation_file_path):
+                try:
+                    os.remove(validation_file_path)
+                    logger.info(f"已清除旧的校验文件: {validation_file_path}")
+                except Exception as e:
+                    logger.error(f"清除旧的校验文件失败: {e}")
+        # 同时清除内存中的数据
+        if hasattr(self, 'preview_page'):
+            self.preview_page.validation_data.clear()

@@ -748,10 +748,16 @@ class AdvancedPage(ttk.Frame):
             self.params_canvas.yview_moveto(0.0)
 
     def _update_iou_label(self, value):
-        self.iou_label.config(text=f"{float(value):.2f}")
+        """更新IOU标签并设置保留两位小数的值"""
+        rounded_value = round(float(value), 2)
+        self.controller.iou_var.set(rounded_value)
+        self.iou_label.config(text=f"{rounded_value:.2f}")
 
     def _update_conf_label(self, value):
-        self.conf_label.config(text=f"{float(value):.2f}")
+        """更新置信度标签并设置保留两位小数的值"""
+        rounded_value = round(float(value), 2)
+        self.controller.conf_var.set(rounded_value)
+        self.conf_label.config(text=f"{rounded_value:.2f}")
 
     def _reset_model_params(self):
         self.controller.iou_var.set(0.3)
@@ -759,8 +765,8 @@ class AdvancedPage(ttk.Frame):
         self.controller.conf_var.set(0.25)
         self._update_conf_label(0.25)
         self.controller.use_fp16_var.set(self.controller.cuda_available)
-        self.controller.use_augment_var.set(False)
-        self.controller.use_agnostic_nms_var.set(False)
+        self.controller.use_augment_var.set(True)
+        self.controller.use_agnostic_nms_var.set(True)
         # self.controller.status_bar.show_message("已重置所有参数到默认值", 3000)
 
     def _check_pytorch_status(self) -> None:

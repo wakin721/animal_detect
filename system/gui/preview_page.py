@@ -23,10 +23,11 @@ class PreviewPage(ttk.Frame):
         self.controller = controller
         self.validation_data = {}
         self.original_image = None
+        self.validation_original_image = None
         self.current_image_path = None
         self.current_detection_results = None
         self.active_keybinds = []
-        self._is_navigating = False  # <--- 添加这一行
+        self._is_navigating = False  
 
         self._create_widgets()
         self.rebind_keys()
@@ -73,9 +74,11 @@ class PreviewPage(ttk.Frame):
     def _create_image_preview_content(self, parent):
         preview_content = ttk.Frame(parent)
         preview_content.pack(fill="both", expand=True)
+        preview_content.columnconfigure(1, weight=1) # 让右侧列扩展
+        preview_content.rowconfigure(0, weight=1) # 让第一行扩展
 
         list_frame = ttk.LabelFrame(preview_content, text="图像文件")
-        list_frame.pack(side="left", fill="y", padx=(0, 10))
+        list_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
         self.file_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT,
                                        selectbackground=self.controller.sidebar_bg,
                                        selectforeground=self.controller.sidebar_fg)
@@ -85,20 +88,28 @@ class PreviewPage(ttk.Frame):
         self.file_listbox.config(yscrollcommand=file_list_scrollbar.set)
 
         preview_right = ttk.Frame(preview_content)
-        preview_right.pack(side="right", fill="both", expand=True)
+        preview_right.grid(row=0, column=1, sticky="nsew")
+        preview_right.columnconfigure(0, weight=1)
+        preview_right.rowconfigure(0, weight=1) # 图片行将扩展
+
         image_frame = ttk.LabelFrame(preview_right, text="图像预览")
-        image_frame.pack(fill="both", expand=True, pady=(0, 10))
+        image_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        image_frame.columnconfigure(0, weight=1)
+        image_frame.rowconfigure(0, weight=1)
+
         self.image_label = ttk.Label(image_frame, text="请从左侧列表选择图像", anchor="center")
-        self.image_label.pack(fill="both", expand=True, padx=10, pady=10)
+        self.image_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.image_label.bind('<Configure>', self._on_resize)
+
 
         info_frame = ttk.LabelFrame(preview_right, text="图像信息")
-        info_frame.pack(fill="x", pady=(0, 10))
-        self.info_text = tk.Text(info_frame, height=4, font=NORMAL_FONT, wrap="word")  # Increased height
+        info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        self.info_text = tk.Text(info_frame, height=4, font=NORMAL_FONT, wrap="word")
         self.info_text.pack(fill="both", expand=True, padx=5, pady=5)
         self.info_text.config(state="disabled")
 
         control_frame = ttk.Frame(preview_right)
-        control_frame.pack(fill="x")
+        control_frame.grid(row=2, column=0, sticky="ew")
         self.show_detection_var = tk.BooleanVar(value=False)
         show_detection_switch = ttk.Checkbutton(
             control_frame,
@@ -118,9 +129,11 @@ class PreviewPage(ttk.Frame):
     def _create_validation_content(self, parent):
         validation_content = ttk.Frame(parent)
         validation_content.pack(fill="both", expand=True)
+        validation_content.columnconfigure(1, weight=1)
+        validation_content.rowconfigure(0, weight=1)
 
         list_frame = ttk.LabelFrame(validation_content, text="处理后图像")
-        list_frame.pack(side="left", fill="y", padx=(0, 10))
+        list_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
         self.validation_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT,
                                              selectbackground=self.controller.sidebar_bg,
                                              selectforeground=self.controller.sidebar_fg)
@@ -130,21 +143,28 @@ class PreviewPage(ttk.Frame):
         self.validation_listbox.config(yscrollcommand=validation_list_scrollbar.set)
 
         preview_right = ttk.Frame(validation_content)
-        preview_right.pack(side="right", fill="both", expand=True)
+        preview_right.grid(row=0, column=1, sticky="nsew")
+        preview_right.columnconfigure(0, weight=1)
+        preview_right.rowconfigure(0, weight=1) # 图片行将扩展
+
         image_frame = ttk.LabelFrame(preview_right, text="图像校验")
-        image_frame.pack(fill="both", expand=True, pady=(0, 10))
+        image_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
+        image_frame.columnconfigure(0, weight=1)
+        image_frame.rowconfigure(0, weight=1)
+
         self.validation_image_label = ttk.Label(image_frame, text="请从左侧列表选择处理后的图像", anchor="center")
-        self.validation_image_label.pack(fill="both", expand=True, padx=10, pady=10)
+        self.validation_image_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         self.validation_image_label.bind("<Double-1>", self.on_image_double_click)
+        self.validation_image_label.bind('<Configure>', self._on_resize)
 
         info_frame = ttk.LabelFrame(preview_right, text="检测信息")
-        info_frame.pack(fill="x", pady=(0, 10))
+        info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         self.validation_info_text = tk.Text(info_frame, height=3, font=NORMAL_FONT, wrap="word")
         self.validation_info_text.pack(fill="both", expand=True, padx=5, pady=5)
         self.validation_info_text.config(state="disabled")
 
         validation_control_frame = ttk.Frame(preview_right)
-        validation_control_frame.pack(fill="x", pady=5)
+        validation_control_frame.grid(row=2, column=0, sticky="ew", pady=5)
         self.validation_status_label = ttk.Label(validation_control_frame, text="未校验", font=NORMAL_FONT)
         self.validation_status_label.pack(side="left", padx=5)
         ttk.Label(validation_control_frame, text="进度:").pack(side="left", padx=(20, 5))
@@ -152,7 +172,7 @@ class PreviewPage(ttk.Frame):
         ttk.Label(validation_control_frame, textvariable=self.validation_progress_var).pack(side="left")
 
         buttons_frame = ttk.Frame(preview_right)
-        buttons_frame.pack(fill="x", pady=10)
+        buttons_frame.grid(row=3, column=0, sticky="ew", pady=10)
         self.correct_button = ttk.Button(buttons_frame, text="正确 ✅", command=lambda: self._mark_validation(True),
                                          width=10)
         self.correct_button.pack(side="left", padx=(0, 5))
@@ -331,6 +351,7 @@ class PreviewPage(ttk.Frame):
         except Exception as e:
             logger.error(f"更新图像预览失败: {e}")
             self.image_label.config(image='', text="无法加载图像")
+            self.original_image = None
 
     def update_image_info(self, file_path: str, file_name: str):
         from system.metadata_extractor import ImageMetadataExtractor
@@ -481,6 +502,7 @@ class PreviewPage(ttk.Frame):
         file_path = os.path.join(photo_dir, file_name)
         try:
             img = Image.open(file_path)
+            self.validation_original_image = img  # 保存原始图像
             resized_img = self._resize_image_to_fit(img, self.validation_image_label.winfo_width(),
                                                     self.validation_image_label.winfo_height())
             photo = ImageTk.PhotoImage(resized_img)
@@ -488,6 +510,7 @@ class PreviewPage(ttk.Frame):
             self.validation_image_label.image = photo
         except Exception as e:
             logger.error(f"加载校验图像失败: {e}")
+            self.validation_original_image = None  # 加载失败时清除
 
         json_path = os.path.join(photo_dir, f"{os.path.splitext(file_name)[0]}.json")
         self.validation_info_text.config(state="normal")
@@ -504,7 +527,7 @@ class PreviewPage(ttk.Frame):
         status = self.validation_data.get(file_name)
         self.validation_status_label.config(
             text=f"已标记: {'正确 ✅' if status is True else '错误 ❌' if status is False else '未校验'}")
-
+        
     def _mark_validation(self, is_correct):
         selection = self.validation_listbox.curselection()
         if not selection:
@@ -568,3 +591,26 @@ class PreviewPage(ttk.Frame):
 
     def _export_validation_excel(self):
         messagebox.showinfo("提示", "此功能尚未实现。")
+
+    def _on_resize(self, event):
+        # 确定是哪个标签触发了事件
+        if event.widget == self.image_label:
+            image_to_resize = self.original_image
+            label_widget = self.image_label
+        elif event.widget == self.validation_image_label:
+            image_to_resize = self.validation_original_image
+            label_widget = self.validation_image_label
+        else:
+            return
+
+        # 如果有原始图片，则根据新大小重新缩放
+        if image_to_resize:
+            # 获取标签的新尺寸
+            width, height = event.width, event.height
+            if width < 2 or height < 2: return  # 避免尺寸过小时出错
+
+            # 重新缩放并更新图片
+            resized_img = self._resize_image_to_fit(image_to_resize, width, height)
+            photo = ImageTk.PhotoImage(resized_img)
+            label_widget.config(image=photo)
+            label_widget.image = photo
