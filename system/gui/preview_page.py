@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 import os
 import json
@@ -7,6 +7,9 @@ import logging
 import cv2
 import threading
 import re
+from system.data_processor import DataProcessor
+from system.metadata_extractor import ImageMetadataExtractor
+from datetime import datetime
 
 from system.config import NORMAL_FONT, SUPPORTED_IMAGE_EXTENSIONS
 
@@ -14,6 +17,108 @@ logger = logging.getLogger(__name__)
 
 
 # In system/gui/preview_page.py
+class CorrectionDialog(tk.Toplevel):
+    """用于修正物种信息的弹窗"""
+
+    def __init__(self, parent, title="修正信息"):
+        super().__init__(parent)
+        self.transient(parent)
+        self.title(title)
+        self.parent = parent
+        self.result = None
+
+        # 初始化输入框变量
+        self.species_name_var = tk.StringVar()
+        self.species_count_var = tk.StringVar()
+
+        # 创建窗口内容
+        body = ttk.Frame(self)
+        self.initial_focus = self.create_body(body)
+        body.pack(padx=15, pady=15)
+
+        self.create_buttons()
+
+        self.grab_set()
+
+        if not self.initial_focus:
+            self.initial_focus = self
+
+        # 协议和窗口位置设置
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.geometry(f"+{parent.winfo_rootx() + 60}+{parent.winfo_rooty() + 60}")
+
+        self.initial_focus.focus_set()
+        self.wait_window(self)
+
+    def create_body(self, master):
+        """创建弹窗主体，包含输入框"""
+        ttk.Label(master, text="正确物种名称:").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        species_name_entry = ttk.Entry(master, textvariable=self.species_name_var, width=25)
+        species_name_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(master, text="物种数量:").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        species_count_entry = ttk.Entry(master, textvariable=self.species_count_var, width=25)
+        species_count_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        return species_name_entry
+
+    def create_buttons(self):
+        """创建“确定”和“取消”按钮"""
+        box = ttk.Frame(self)
+        ok_button = ttk.Button(box, text="确定", width=10, command=self.ok, default=tk.ACTIVE)
+        ok_button.pack(side=tk.LEFT, padx=10, pady=10)
+        cancel_button = ttk.Button(box, text="取消", width=10, command=self.cancel)
+        cancel_button.pack(side=tk.LEFT, padx=10, pady=10)
+
+        # 绑定快捷键
+        self.bind("<Return>", self.ok)
+        self.bind("<Escape>", self.cancel)
+
+        box.pack()
+
+    def ok(self, event=None):
+        """“确定”按钮的回调函数"""
+        species_name = self.species_name_var.get().strip()
+        species_count_str = self.species_count_var.get().strip()
+
+        # 校验物种名称
+        if not species_name:
+            messagebox.showwarning("输入错误", "物种名称不能为空。", parent=self)
+            return
+
+        if not species_count_str:
+            species_count_str = '空'
+            self.result = (species_name, species_count_str)
+            self.destroy()
+            return
+
+
+        # 检查物种数量格式
+        if species_count_str.lower() != '空':
+            try:
+                # 尝试按逗号分割并转换为整数
+                counts = [int(c.strip()) for c in species_count_str.split(',')]
+                # 检查是否所有数字都为正数
+                if not all(c > 0 for c in counts):
+                    raise ValueError("数量必须是正整数。")
+            except ValueError:
+                messagebox.showwarning(
+                    "输入格式错误",
+                    "物种数量必须为以下格式之一：\n\n"
+                    "1. 单个正整数 (例如: 3)\n"
+                    "2. 以英文逗号隔开的多个正整数 (例如: 5,2)\n"
+                    "3. 文字“空”",
+                    parent=self
+                )
+                return
+
+        self.result = (species_name, species_count_str)
+        self.destroy()
+
+    def cancel(self, event=None):
+        """“取消”按钮的回调函数"""
+        self.result = None
+        self.destroy()
 
 class PreviewPage(ttk.Frame):
     """图像预览和校验页面"""
@@ -180,7 +285,7 @@ class PreviewPage(ttk.Frame):
                                            width=10)
         self.incorrect_button.pack(side="left", padx=5)
         self.export_excel_button = ttk.Button(buttons_frame, text="导出为Excel", command=self._export_validation_excel,
-                                              width=12, state="disabled")
+                                              width=12, state="normal")
         self.export_excel_button.pack(side="right", padx=(5, 0))
         self.export_error_button = ttk.Button(buttons_frame, text="导出错误图片", command=self._export_error_images,
                                               width=12)
@@ -445,7 +550,7 @@ class PreviewPage(ttk.Frame):
         self.info_text.insert(tk.END, basic_info)
 
         detection_parts = ["检测结果:"]
-        if species_info and species_info.get('物种名称'):
+        if species_info and species_info.get('物种名称') and species_info['物种名称'] != '空':
             names = species_info['物种名称'].split(',')
             counts = species_info.get('物种数量', '').split(',')
             info_parts = [f"{n}: {c}只" for n, c in zip(names, counts)]
@@ -533,15 +638,31 @@ class PreviewPage(ttk.Frame):
         if not selection:
             return
         file_name = self.validation_listbox.get(selection[0])
-        self.validation_data[file_name] = is_correct
-        self.validation_status_label.config(text=f"已标记: {'正确 ✅' if is_correct else '错误 ❌'}")
+
+        if not is_correct:
+            # 弹出修正对话框
+            dialog = CorrectionDialog(self)
+            # 如果用户点击了“确定”并输入了有效值
+            if dialog.result:
+                correct_species_name, correct_species_count = dialog.result
+                self._update_json_file(file_name, correct_species_name, correct_species_count)
+                # 即使修正了，也标记为错误，以便导出
+                self.validation_data[file_name] = False
+                # 刷新信息显示
+                self._on_validation_file_selected(None)
+            else:
+                # 如果用户取消或关闭了对话框，则不进行任何操作
+                return
+        else:
+            self.validation_data[file_name] = True
+
+        # 更新状态标签并保存
+        self.validation_status_label.config(text=f"已标记: {'正确 ✅' if self.validation_data.get(file_name) else '错误 ❌'}")
         self._save_validation_data()
         self._update_validation_progress()
 
-        # 自动跳转到下一张图片
+        # 自动选择下一张图片
         self._select_next_image()
-
-        # 在所有操作完成后，将焦点交还给列表框
         self.validation_listbox.focus_set()
 
     def _update_validation_progress(self):
@@ -569,28 +690,178 @@ class PreviewPage(ttk.Frame):
         else:
             self.validation_data = {}
 
+    def _update_json_file(self, file_name: str, new_species: str, new_count: str):
+        """根据弹窗输入更新JSON文件"""
+        photo_dir = self.controller.get_temp_photo_dir()
+        if not photo_dir: return
+
+        base_name, _ = os.path.splitext(file_name)
+        json_path = os.path.join(photo_dir, f"{base_name}.json")
+
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r+', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # 更新字段
+                    data['物种名称'] = new_species
+                    data['物种数量'] = new_count
+                    data['最低置信度'] = '人工校验'
+                    data['检测时间'] = f"{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}(人工校验)"
+                    data['检测框'] = []  # 清空检测框
+
+                    # 写回文件
+                    f.seek(0)
+                    json.dump(data, f, ensure_ascii=False, indent=4)
+                    f.truncate()
+            except Exception as e:
+                logger.error(f"更新JSON文件失败 ({file_name}): {e}")
+                messagebox.showerror("错误", f"更新JSON文件失败: {e}", parent=self)
+
     def _export_error_images(self):
         error_files = [f for f, v in self.validation_data.items() if v is False]
         if not error_files:
-            messagebox.showinfo("提示", "没有标记为错误的图片")
+            messagebox.showinfo("提示", "没有标记为错误的图片。", parent=self)
             return
+
         source_dir = self.controller.start_page.file_path_entry.get()
         save_dir = self.controller.start_page.save_path_entry.get()
         if not all([source_dir, save_dir]):
-            messagebox.showerror("错误", "请设置源路径和保存路径")
+            messagebox.showerror("错误", "请先在“开始”页面设置源路径和保存路径。", parent=self)
             return
+
         error_folder = os.path.join(save_dir, "error")
         os.makedirs(error_folder, exist_ok=True)
         from shutil import copy
+
+        temp_photo_dir = self.controller.get_temp_photo_dir()
+        copied_count = 0
+        failed_files = []
+
         for file in error_files:
             try:
-                copy(os.path.join(source_dir, file), error_folder)
+                json_path = os.path.join(temp_photo_dir, f"{os.path.splitext(file)[0]}.json")
+                corrected_species_name = "未分类错误" # 默认文件夹
+
+                # 如果是人工校验过的，按修正后的物种名分类
+                if os.path.exists(json_path):
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    if data.get('最低置信度') == '人工校验':
+                        corrected_species_name = data.get('物种名称', corrected_species_name)
+
+                # 创建物种分类子文件夹
+                species_folder = os.path.join(error_folder, corrected_species_name)
+                os.makedirs(species_folder, exist_ok=True)
+
+                # 复制原图
+                source_image_path = os.path.join(source_dir, file)
+                if os.path.exists(source_image_path):
+                    copy(source_image_path, species_folder)
+                    copied_count += 1
+                else:
+                    logger.warning(f"源图片未找到，无法复制: {source_image_path}")
+                    failed_files.append(file)
+
             except Exception as e:
-                logger.error(f"复制错误图片失败: {e}")
-        messagebox.showinfo("成功", f"成功导出 {len(error_files)} 张错误图片到 {error_folder}")
+                logger.error(f"导出错误图片失败 ({file}): {e}")
+                failed_files.append(file)
+
+        message = f"成功导出 {copied_count} 张错误图片到以下文件夹:\n{error_folder}"
+        if failed_files:
+            message += f"\n\n有 {len(failed_files)} 个文件导出失败，请检查日志获取详细信息。"
+            messagebox.showwarning("导出完成", message, parent=self)
+        else:
+            messagebox.showinfo("成功", message, parent=self)
 
     def _export_validation_excel(self):
-        messagebox.showinfo("提示", "此功能尚未实现。")
+        """从校验页面的数据导出为Excel"""
+        temp_dir = self.controller.get_temp_photo_dir()
+        source_dir = self.controller.start_page.file_path_entry.get()
+
+        if not temp_dir or not os.path.exists(temp_dir) or not source_dir:
+            messagebox.showerror("错误", "无法找到临时文件或源文件路径，请确保已进行批处理并且路径设置正确。", parent=self)
+            return
+
+        json_files = [f for f in os.listdir(temp_dir) if f.lower().endswith('.json')]
+        if not json_files:
+            messagebox.showinfo("提示", "没有找到任何处理后的数据，无法导出。", parent=self)
+            return
+
+        # 弹出文件保存对话框
+        output_path = filedialog.asksaveasfilename(
+            title="选择Excel保存位置",
+            defaultextension=".xlsx",
+            filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
+            initialfile="校验结果.xlsx",
+            parent=self
+        )
+
+        # 如果用户取消了选择，则不执行任何操作
+        if not output_path:
+            return
+
+        all_image_data = []
+        earliest_date = None
+
+        for json_file in json_files:
+            json_path = os.path.join(temp_dir, json_file)
+            image_filename = os.path.splitext(json_file)[0] + ".jpg" # 假设原始文件是.jpg
+            image_path = os.path.join(source_dir, image_filename)
+
+            if not os.path.exists(image_path):
+                # 尝试其他可能的扩展名
+                found_image = False
+                for ext in SUPPORTED_IMAGE_EXTENSIONS:
+                    temp_path = os.path.join(source_dir, os.path.splitext(json_file)[0] + ext)
+                    if os.path.exists(temp_path):
+                        image_path = temp_path
+                        found_image = True
+                        break
+                if not found_image:
+                    logger.warning(f"找不到原始图片: {image_filename}")
+                    continue
+
+            try:
+                # 1. 提取元数据
+                metadata, _ = ImageMetadataExtractor.extract_metadata(image_path, os.path.basename(image_path))
+
+                # 2. 读取JSON数据
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+
+                # 3. 合并数据
+                metadata.update(json_data)
+                all_image_data.append(metadata)
+
+                # 4. 找到最早日期
+                date_taken = metadata.get('拍摄日期对象')
+                if date_taken:
+                    if earliest_date is None or date_taken < earliest_date:
+                        earliest_date = date_taken
+
+            except Exception as e:
+                logger.error(f"处理文件 {json_file} 时出错: {e}")
+
+        if not all_image_data:
+            messagebox.showerror("错误", "未能成功处理任何数据，无法导出。", parent=self)
+            return
+
+        # 使用DataProcessor处理数据
+        processed_data = DataProcessor.process_independent_detection(all_image_data)
+        if earliest_date:
+            processed_data = DataProcessor.calculate_working_days(processed_data, earliest_date)
+
+        # 导出到Excel
+        success = DataProcessor.export_to_excel(processed_data, output_path)
+
+        if success:
+            if messagebox.askyesno("成功", f"数据已成功导出到:\n{output_path}\n\n是否立即打开文件？", parent=self):
+                try:
+                    os.startfile(output_path)
+                except Exception as e:
+                    messagebox.showerror("错误", f"无法打开文件: {e}", parent=self)
+        else:
+            messagebox.showerror("导出失败", "导出Excel文件时发生错误，请查看日志文件获取详情。", parent=self)
 
     def _on_resize(self, event):
         # 确定是哪个标签触发了事件

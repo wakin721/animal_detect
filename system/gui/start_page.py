@@ -51,21 +51,17 @@ class StartPage(ttk.Frame):
         options_frame = ttk.LabelFrame(self, text="功能选项")
         options_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=10)
         self.save_detect_image_var = tk.BooleanVar(value=True)
-        self.output_excel_var = tk.BooleanVar(value=True)
         self.copy_img_var = tk.BooleanVar(value=False)
         options_container = ttk.Frame(options_frame)
         options_container.pack(fill="x", padx=10, pady=10)
-        ttk.Checkbutton(options_container, text="保存探测结果图片", variable=self.save_detect_image_var).grid(row=0,
-                                                                                                              column=0,
-                                                                                                              sticky="w",
-                                                                                                              pady=5,
-                                                                                                              padx=10)
-        ttk.Checkbutton(options_container, text="输出为Excel表格", variable=self.output_excel_var).grid(row=1, column=0,
-                                                                                                        sticky="w",
-                                                                                                        pady=5, padx=10)
-        ttk.Checkbutton(options_container, text="按物种分类图片", variable=self.copy_img_var).grid(row=2, column=0,
-                                                                                                   sticky="w", pady=5,
-                                                                                                   padx=10)
+
+        ttk.Checkbutton(
+            options_container, text="保存探测结果图片", variable=self.save_detect_image_var
+        ).grid(row=0, column=0, sticky="w", pady=5, padx=10)
+
+        ttk.Checkbutton(
+            options_container, text="按物种分类图片", variable=self.copy_img_var
+        ).grid(row=1, column=0, sticky="w", pady=5, padx=10)
 
         ttk.Frame(self).grid(row=3, column=0, sticky="nsew")
 
@@ -76,12 +72,7 @@ class StartPage(ttk.Frame):
         progress_container.grid(row=1, column=0, sticky="ew")
         progress_container.grid_propagate(False)
 
-        # V V V V V V V V V V V V V V V V V V V V
-        # MODIFICATION: Pass accent color to SpeedProgressBar
-        # V V V V V V V V V V V V V V V V V V V V
         self.progress_frame = SpeedProgressBar(progress_container, accent_color=self.controller.accent_color)
-        # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
-
         self.progress_frame.pack(fill="both", expand=True)
         self.progress_frame.hide()
 

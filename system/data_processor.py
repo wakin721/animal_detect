@@ -60,7 +60,7 @@ class DataProcessor:
             species_names = img_info['物种名称'].split(',')
             current_time = img_info.get('拍摄日期对象')
 
-            if not current_time or not species_names or species_names == ['']:
+            if not current_time or not species_names or species_names == [''] or species_names == ['空']:
                 img_info['独立探测首只'] = ''
                 continue
 

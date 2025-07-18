@@ -427,7 +427,6 @@ class ObjectDetectionGUI:
         self.preview_page.image_label.bind("<Double-1>", self.preview_page.on_image_double_click)
         self.preview_page.show_detection_var.trace("w", self.preview_page.toggle_detection_preview)
         self.start_page.save_detect_image_var.trace("w", lambda *args: self._save_current_settings())
-        self.start_page.output_excel_var.trace("w", lambda *args: self._save_current_settings())
         self.start_page.copy_img_var.trace("w", lambda *args: self._save_current_settings())
         self.advanced_page.controller.use_fp16_var.trace("w", lambda *args: self._save_current_settings())
         self.advanced_page.controller.iou_var.trace("w", lambda *args: self._save_current_settings())
@@ -444,7 +443,7 @@ class ObjectDetectionGUI:
     def _get_current_settings(self):
         return {"file_path": self.start_page.file_path_entry.get(), "save_path": self.start_page.save_path_entry.get(),
                 "save_detect_image": self.start_page.save_detect_image_var.get(),
-                "output_excel": self.start_page.output_excel_var.get(), "copy_img": self.start_page.copy_img_var.get(),
+                #"output_excel": self.start_page.output_excel_var.get(), "copy_img": self.start_page.copy_img_var.get(),
                 "use_fp16": self.advanced_page.controller.use_fp16_var.get(),
                 "iou": self.advanced_page.controller.iou_var.get(),
                 "conf": self.advanced_page.controller.conf_var.get(),
@@ -474,7 +473,7 @@ class ObjectDetectionGUI:
                 self.start_page.save_path_entry.delete(0, tk.END)
                 self.start_page.save_path_entry.insert(0, settings["save_path"])
             self.start_page.save_detect_image_var.set(settings.get("save_detect_image", True))
-            self.start_page.output_excel_var.set(settings.get("output_excel", True))
+            #self.start_page.output_excel_var.set(settings.get("output_excel", True))
             self.start_page.copy_img_var.set(settings.get("copy_img", False))
             self.advanced_page.controller.use_fp16_var.set(settings.get("use_fp16", False))
             iou_value = settings.get("iou", 0.3)
@@ -660,15 +659,11 @@ class ObjectDetectionGUI:
         file_path = self.start_page.file_path_entry.get()
         save_path = self.start_page.save_path_entry.get()
         save_detect_image = self.start_page.save_detect_image_var.get()
-        output_excel = self.start_page.output_excel_var.get()
         copy_img = self.start_page.copy_img_var.get()
         use_fp16 = self.advanced_page.controller.use_fp16_var.get()
 
         if not self._validate_inputs(file_path, save_path): return
         if self.is_processing: return
-        if not any([save_detect_image, output_excel, copy_img]):
-            messagebox.showerror("错误", "请至少选择一个处理功能。")
-            return
 
         selected_tab_id = self.preview_page.preview_notebook.select()
         if selected_tab_id:
@@ -684,7 +679,7 @@ class ObjectDetectionGUI:
 
         threading.Thread(
             target=self._process_images_thread,
-            args=(file_path, save_path, save_detect_image, output_excel, copy_img, use_fp16, resume_from),
+            args=(file_path, save_path, save_detect_image, copy_img, use_fp16, resume_from),
             daemon=True
         ).start()
 
@@ -790,7 +785,7 @@ class ObjectDetectionGUI:
                 self.excel_data = excel_data
                 excel_data = DataProcessor.process_independent_detection(excel_data)
                 if earliest_date: excel_data = DataProcessor.calculate_working_days(excel_data, earliest_date)
-                if excel_data and output_excel: self._export_and_open_excel(excel_data, save_path)
+                #if excel_data and output_excel: self._export_and_open_excel(excel_data, save_path)
                 self._delete_processing_cache()
                 if self.master.winfo_exists(): self.status_bar.status_label.config(text="处理完成！")
                 messagebox.showinfo("成功", "图像处理完成！")
