@@ -55,6 +55,7 @@ class ObjectDetectionGUI:
         self.current_page = "settings"
         self.update_channel_var = tk.StringVar(value="稳定版 (Release)")
         self.model_var = tk.StringVar()  # <<< 新增：用于跟踪所选模型的变量
+        self.confidence_settings = self.settings_manager.load_confidence_settings()
 
         self._apply_system_theme()
         self._setup_window()
@@ -260,7 +261,7 @@ class ObjectDetectionGUI:
 
     def _setup_window(self):
         self.master.title(APP_TITLE)
-        width, height = 1050, 700
+        width, height = 1100, 750
         screen_width = self.master.winfo_screenwidth()
         screen_height = self.master.winfo_screenheight()
         x = (screen_width - width) // 2
@@ -380,6 +381,10 @@ class ObjectDetectionGUI:
 
         style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"), padding=(0, 10, 0, 10))
         style.configure("Process.TButton", font=("Segoe UI", 11), padding=(10, 5))
+
+        style.map("Selected.TButton",
+                  background=[('!active', self.accent_color), ('active', self.accent_color)],
+                  foreground=[('!active', sidebar_fg), ('active', sidebar_fg)])
 
     def _show_page(self, page_id: str):
         self.sidebar.set_active_button(page_id)
@@ -668,7 +673,7 @@ class ObjectDetectionGUI:
         selected_tab_id = self.preview_page.preview_notebook.select()
         if selected_tab_id:
             tab_text = self.preview_page.preview_notebook.tab(selected_tab_id, "text")
-            if tab_text == "检查校验":
+            if tab_text == "检验校验(时间)" or tab_text == "检验校验(物种)":
                 self.preview_page.preview_notebook.select(self.preview_page.image_preview_tab)
 
         self._set_processing_state(True)
@@ -690,7 +695,7 @@ class ObjectDetectionGUI:
         else:
             messagebox.showinfo("信息", "处理继续进行。")
 
-    def _process_images_thread(self, file_path, save_path, save_detect_image, output_excel, copy_img, use_fp16,
+    def _process_images_thread(self, file_path, save_path, save_detect_image, copy_img, use_fp16,
                                resume_from=0):
         start_time = time.time()
         excel_data = [] if resume_from == 0 else self.excel_data
@@ -742,7 +747,7 @@ class ObjectDetectionGUI:
                 try:
                     img_path = os.path.join(file_path, filename)
                     image_info, img = ImageMetadataExtractor.extract_metadata(img_path, filename)
-                    species_info = self.image_processor.detect_species(img_path, use_fp16, iou, conf, augment,
+                    species_info = self.image_processor.detect_species(img_path, bool(use_fp16), iou, conf, augment,
                                                                        agnostic_nms)
                     species_info['检测时间'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     detect_results = species_info.get('detect_results')
@@ -767,7 +772,7 @@ class ObjectDetectionGUI:
                     logger.error(f"处理文件 {filename} 失败: {e}")
                 processed_files += 1
                 if processed_files % 10 == 0: self._save_processing_cache(excel_data, file_path, save_path,
-                                                                          save_detect_image, output_excel, copy_img,
+                                                                          save_detect_image, True, copy_img,
                                                                           use_fp16, processed_files, total_files,
                                                                           iou, conf, augment, agnostic_nms)
                 try:

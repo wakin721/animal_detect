@@ -152,3 +152,26 @@ class SettingsManager:
         if settings and key in settings:
             return settings[key]
         return default
+
+    def load_confidence_settings(self) -> Dict[str, float]:
+        """从conf.json加载物种置信度设置"""
+        conf_file = os.path.join(self.settings_dir, "conf.json")
+        if not os.path.exists(conf_file):
+            return {}
+        try:
+            with open(conf_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"加载置信度配置文件失败: {e}")
+            return {}
+
+    def save_confidence_settings(self, conf_data: Dict[str, float]) -> bool:
+        """保存物种置信度设置到conf.json"""
+        conf_file = os.path.join(self.settings_dir, "conf.json")
+        try:
+            with open(conf_file, 'w', encoding='utf-8') as f:
+                json.dump(conf_data, f, ensure_ascii=False, indent=4)
+            return True
+        except Exception as e:
+            logger.error(f"保存置信度配置文件失败: {e}")
+            return False

@@ -3,8 +3,8 @@
 """
 
 # 应用信息常量
-APP_TITLE = "物种信息检测 v2.3"
-APP_VERSION = "2.3.0-release"
+APP_TITLE = "物种信息检测 v2.5"
+APP_VERSION = "2.5.1-beta"
 DEFAULT_EXCEL_FILENAME = "物种检测信息.xlsx"
 
 # 文件支持相关常量
