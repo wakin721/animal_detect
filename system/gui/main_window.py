@@ -359,6 +359,15 @@ class ObjectDetectionGUI:
     def _setup_styles(self):
         style = ttk.Style()
         sidebar_bg = self.accent_color
+
+        try:
+            hex_color = sidebar_bg.lstrip('#')
+            r, g, b = tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            sidebar_fg = "#000000" if brightness > 128 else "#FFFFFF"
+        except:
+            sidebar_fg = "#FFFFFF"  # 如果颜色计算失败，默认为白色
+
         sidebar_fg = "#FFFFFF"
         highlight_color = "#FFFFFF"
         self.sidebar_bg = sidebar_bg
@@ -439,6 +448,10 @@ class ObjectDetectionGUI:
         self.advanced_page.controller.use_augment_var.trace("w", lambda *args: self._save_current_settings())
         self.advanced_page.controller.use_agnostic_nms_var.trace("w", lambda *args: self._save_current_settings())
         self.update_channel_var.trace("w", lambda *args: self._save_current_settings())
+        self.preview_page.export_format_var.trace("w", lambda *args: self._save_current_settings())
+
+        self.master.bind("<Up>", self._navigate_image_up)
+        self.master.bind("<Down>", self._navigate_image_down)
 
     def _save_current_settings(self):
         if not self.settings_manager: return
@@ -446,21 +459,23 @@ class ObjectDetectionGUI:
         if self.settings_manager.save_settings(settings): logger.info("设置已保存")
 
     def _get_current_settings(self):
-        return {"file_path": self.start_page.file_path_entry.get(), "save_path": self.start_page.save_path_entry.get(),
-                "save_detect_image": self.start_page.save_detect_image_var.get(),
-                #"output_excel": self.start_page.output_excel_var.get(), "copy_img": self.start_page.copy_img_var.get(),
-                "use_fp16": self.advanced_page.controller.use_fp16_var.get(),
-                "iou": self.advanced_page.controller.iou_var.get(),
-                "conf": self.advanced_page.controller.conf_var.get(),
-                "use_augment": self.advanced_page.controller.use_augment_var.get(),
-                "use_agnostic_nms": self.advanced_page.controller.use_agnostic_nms_var.get(),
-                "update_channel": self.update_channel_var.get(),
-                "key_up": self.advanced_page.key_up_var.get(),
-                "key_down": self.advanced_page.key_down_var.get(),
-                "key_correct": self.advanced_page.key_correct_var.get(),
-                "key_incorrect": self.advanced_page.key_incorrect_var.get(),
-                "theme": self.advanced_page.theme_var.get(),
-                "selected_model": self.model_var.get()}  # <<< 修改：添加选择的模型
+        settings = {"file_path": self.start_page.file_path_entry.get(),
+                    "save_path": self.start_page.save_path_entry.get(),
+                    "save_detect_image": self.start_page.save_detect_image_var.get(),
+                    "copy_img": self.start_page.copy_img_var.get(),
+                    "use_fp16": self.advanced_page.controller.use_fp16_var.get(),
+                    "iou": self.advanced_page.controller.iou_var.get(),
+                    "conf": self.advanced_page.controller.conf_var.get(),
+                    "use_augment": self.advanced_page.controller.use_augment_var.get(),
+                    "use_agnostic_nms": self.advanced_page.controller.use_agnostic_nms_var.get(),
+                    "update_channel": self.update_channel_var.get(),
+                    "theme": self.advanced_page.theme_var.get(),
+                    "selected_model": self.model_var.get()}
+
+        if hasattr(self, 'preview_page'):
+            settings["export_format"] = self.preview_page.export_format_var.get()
+
+        return settings
 
     def _load_settings_to_ui(self, settings: dict):
         if not settings:
@@ -478,7 +493,6 @@ class ObjectDetectionGUI:
                 self.start_page.save_path_entry.delete(0, tk.END)
                 self.start_page.save_path_entry.insert(0, settings["save_path"])
             self.start_page.save_detect_image_var.set(settings.get("save_detect_image", True))
-            #self.start_page.output_excel_var.set(settings.get("output_excel", True))
             self.start_page.copy_img_var.set(settings.get("copy_img", False))
             self.advanced_page.controller.use_fp16_var.set(settings.get("use_fp16", False))
             iou_value = settings.get("iou", 0.3)
@@ -493,16 +507,13 @@ class ObjectDetectionGUI:
             self.advanced_page._update_conf_label(settings.get("conf", 0.25))
             self.update_channel_var.set(settings.get("update_channel", "稳定版 (Release)"))
 
-            # Load keybindings
-            self.advanced_page.key_up_var.set(settings.get("key_up", "<Up>"))
-            self.advanced_page.key_down_var.set(settings.get("key_down", "<Down>"))
-            self.advanced_page.key_correct_var.set(settings.get("key_correct", "<Key-1>"))
-            self.advanced_page.key_incorrect_var.set(settings.get("key_incorrect", "<Key-2>"))
-            self.preview_page.rebind_keys()
 
             # Load theme
             self.advanced_page.theme_var.set(settings.get("theme", "自动"))
             self.change_theme()
+
+            if hasattr(self, 'preview_page'):
+                self.preview_page.export_format_var.set(settings.get("export_format", "CSV"))
 
             '''# <<< 新增：加载并应用模型选择 >>>
             saved_model = settings.get("selected_model", "")
@@ -752,7 +763,7 @@ class ObjectDetectionGUI:
                     species_info['检测时间'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     detect_results = species_info.get('detect_results')
                     if detect_results:
-                        self.image_processor.save_detection_temp(detect_results, filename, temp_photo_dir)
+                        #self.image_processor.save_detection_temp(detect_results, filename, temp_photo_dir)
                         self.image_processor.save_detection_info_json(detect_results, filename, species_info,
                                                                       temp_photo_dir)
                         if self.master.winfo_exists():
@@ -788,7 +799,7 @@ class ObjectDetectionGUI:
                                                                                                 speed=0,
                                                                                                 remaining_time="已完成"))
                 self.excel_data = excel_data
-                excel_data = DataProcessor.process_independent_detection(excel_data)
+                excel_data = DataProcessor.process_independent_detection(excel_data, self.confidence_settings)
                 if earliest_date: excel_data = DataProcessor.calculate_working_days(excel_data, earliest_date)
                 #if excel_data and output_excel: self._export_and_open_excel(excel_data, save_path)
                 self._delete_processing_cache()
@@ -899,3 +910,15 @@ class ObjectDetectionGUI:
         # 同时清除内存中的数据
         if hasattr(self, 'preview_page'):
             self.preview_page.validation_data.clear()
+
+    def _navigate_image_up(self, event=None):
+        """处理向上箭头键事件，用于在预览页面切换图片。"""
+        if self.current_page == "preview":
+            self.preview_page.navigate_listbox('up')
+            return "break"  # 新增：阻止事件继续传播
+
+    def _navigate_image_down(self, event=None):
+        """处理向下箭头键事件，用于在预览页面切换图片。"""
+        if self.current_page == "preview":
+            self.preview_page.navigate_listbox('down')
+            return "break"  # 新增：阻止事件继续传播

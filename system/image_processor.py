@@ -202,16 +202,39 @@ class ImageProcessor:
                 "检测时间": species_info.get('检测时间', '')
             }
             boxes_info = []
-            for r in results:
-                for i, box in enumerate(r.boxes):
-                    cls_id = int(box.cls.item())
-                    species_name = r.names[cls_id]
-                    confidence = float(box.conf.item())
-                    bbox = [float(x) for x in box.xyxy.tolist()[0]]
-                    box_info = {"物种": species_name, "置信度": confidence, "边界框": bbox}
-                    boxes_info.append(box_info)
+            all_confidences = []
+            all_classes = []
+            names_map = {}
+
+            if results:
+                for r in results:
+                    original_names_map = r.names
+                    translated_names_map = {
+                        class_id: self.translation_dict.get(english_name, english_name)
+                        for class_id, english_name in original_names_map.items()
+                    }
+                    names_map = translated_names_map
+                    if r.boxes is not None:
+                        for i, box in enumerate(r.boxes):
+                            cls_id = int(box.cls.item())
+                            species_name = r.names[cls_id]
+
+                            translated_name = self.translation_dict.get(species_name, species_name)
+
+                            confidence = float(box.conf.item())
+                            bbox = [float(x) for x in box.xyxy.tolist()[0]]
+
+                            box_info = {"物种": translated_name, "置信度": confidence, "边界框": bbox}
+
+                            boxes_info.append(box_info)
+                        all_confidences = r.boxes.conf.tolist()
+                        all_classes = r.boxes.cls.tolist()
+
             data_to_save["检测框"] = boxes_info
-            
+            data_to_save["all_confidences"] = all_confidences
+            data_to_save["all_classes"] = all_classes
+            data_to_save["names_map"] = names_map
+
             base_name, _ = os.path.splitext(image_name)
             json_path = os.path.join(temp_photo_dir, f"{base_name}.json")
 
@@ -222,7 +245,6 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"保存检测结果JSON失败: {e}")
             return ""
-    # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
 
     def load_model(self, model_path: str) -> None:
         """加载新的模型"""

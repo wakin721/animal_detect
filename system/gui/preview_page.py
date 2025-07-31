@@ -7,11 +7,15 @@ import logging
 import cv2
 import threading
 import re
-from system.data_processor import DataProcessor
-from system.metadata_extractor import ImageMetadataExtractor
+import numpy as np
+
 from datetime import datetime
 from collections import defaultdict
+from PIL import Image, ImageDraw, ImageFont
+from collections import Counter
 
+from system.data_processor import DataProcessor
+from system.metadata_extractor import ImageMetadataExtractor
 from system.config import NORMAL_FONT, SUPPORTED_IMAGE_EXTENSIONS
 from system.utils import resource_path
 
@@ -134,6 +138,12 @@ class PreviewPage(ttk.Frame):
         self.species_validation_original_image = None
         self.current_image_path = None
         self.current_detection_results = None
+
+        self.last_selected_preview_image = None
+        self.last_selected_validation_image = None
+        self.last_selected_species_image = None
+
+        self.current_preview_info = {}
         self.active_keybinds = []
         self._is_navigating = False
 
@@ -144,13 +154,38 @@ class PreviewPage(ttk.Frame):
         self._selected_species_button = None
         self._selected_quantity_button = None
 
+        self.color_palette = [
+            '#FF3838', '#FF9D97', '#FF701F', '#FFB21D', '#CFD231', '#48F90A', '#92CC17', '#3CD4F5',
+            '#0052FF', '#6541D1', '#A777F5', '#701F57', '#FDE8DC', '#FFEADD', '#FFDBAD', '#FCDB6D',
+            '#E4D884', '#B6EE93', '#ECF2C2', '#C4E4E8', '#ABCDFF', '#C8B0F4'
+        ]
+        self.species_color_map = {}
+
+        global_conf = self.controller.confidence_settings.get("global", 0.25)
+        self.validation_conf_var = tk.DoubleVar(value=global_conf)
+
+        self.preview_conf_var = tk.DoubleVar(value=global_conf)
+        self.current_validation_info = {}
+        self.validation_conf_label = None
+        self.current_selected_validation_species = None
+        self._selected_validation_species_button = None
+        self._selected_validation_quantity_button = None
+        self.validation_progress_var = tk.StringVar(value="0/0")
+
+        self.export_format_var = tk.StringVar(value="CSV")
+
+        self._species_validation_marked = None
+        self._count_validation_marked = None
+        self._selected_validation_species_button = None
+        self._selected_validation_quantity_button = None
+
+
         self.species_conf_var = tk.DoubleVar(value=0.25)
         self.current_species_info = {}
         self.species_conf_label = None
         self.current_selected_species = None
 
         self._create_widgets()
-        self.rebind_keys()
 
     def _create_widgets(self):
         self.preview_notebook = ttk.Notebook(self)
@@ -205,11 +240,16 @@ class PreviewPage(ttk.Frame):
         list_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
         self.file_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT,
                                        selectbackground=self.controller.sidebar_bg,
-                                       selectforeground=self.controller.sidebar_fg)
+                                       selectforeground=self.controller.sidebar_fg,
+                                       exportselection=False)
+
         self.file_listbox.pack(side="left", fill="both", expand=True)
         file_list_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.file_listbox.yview)
         file_list_scrollbar.pack(side="right", fill="y")
         self.file_listbox.config(yscrollcommand=file_list_scrollbar.set)
+
+        self.file_listbox.bind("<Up>", self._navigate_listbox_up)
+        self.file_listbox.bind("<Down>", self._navigate_listbox_down)
 
         preview_right = ttk.Frame(preview_content)
         preview_right.grid(row=0, column=1, sticky="nsew")
@@ -234,6 +274,8 @@ class PreviewPage(ttk.Frame):
 
         control_frame = ttk.Frame(preview_right)
         control_frame.grid(row=2, column=0, sticky="ew")
+        control_frame.columnconfigure(1, weight=1) # 让滑块区域扩展
+
         self.show_detection_var = tk.BooleanVar(value=False)
         show_detection_switch = ttk.Checkbutton(
             control_frame,
@@ -242,6 +284,17 @@ class PreviewPage(ttk.Frame):
             command=self.toggle_detection_preview
         )
         show_detection_switch.pack(side="left")
+
+        # 新增滑块和标签
+        self.preview_conf_slider = ttk.Scale(
+            control_frame, from_=0.05, to=0.95, orient="horizontal",
+            variable=self.preview_conf_var,
+            command=self._on_preview_confidence_slider_changed
+        )
+        self.preview_conf_slider.pack(side="left", fill="x", expand=True, padx=10)
+        self.preview_conf_label = ttk.Label(control_frame, text=f"{self.preview_conf_var.get():.2f}")
+        self.preview_conf_label.pack(side="left")
+
         self.detect_button = ttk.Button(
             control_frame,
             text="检测当前图像",
@@ -251,162 +304,216 @@ class PreviewPage(ttk.Frame):
         self.detect_button.pack(side="right")
 
     def _create_validation_content(self, parent):
+        """创建“检验校验(时间)”标签页内容，使其与物种校验页一致"""
+        style = ttk.Style()
+
+        text_color = "white" if self.controller.is_dark_mode else "black"
+        style.map("Selected.TButton",
+                  background=[('!active', self.controller.accent_color), ('active', self.controller.accent_color)],
+                  foreground=[('!active', text_color), ('active', text_color)])
+
         validation_content = ttk.Frame(parent)
         validation_content.pack(fill="both", expand=True)
         validation_content.columnconfigure(1, weight=1)
         validation_content.rowconfigure(0, weight=1)
 
+        # Left side: File List
         list_frame = ttk.LabelFrame(validation_content, text="处理后图像")
-        list_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
+        list_frame.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+
         self.validation_listbox = tk.Listbox(list_frame, width=25, font=NORMAL_FONT,
                                              selectbackground=self.controller.sidebar_bg,
-                                             selectforeground=self.controller.sidebar_fg)
-        self.validation_listbox.pack(side="left", fill="both", expand=True)
+                                             selectforeground=self.controller.sidebar_fg,
+                                             exportselection=False)
+
+        self.validation_listbox.grid(row=0, column=0, sticky="nsew")
         validation_list_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.validation_listbox.yview)
-        validation_list_scrollbar.pack(side="right", fill="y")
+        validation_list_scrollbar.grid(row=0, column=1, sticky="ns")
         self.validation_listbox.config(yscrollcommand=validation_list_scrollbar.set)
-
-        preview_right = ttk.Frame(validation_content)
-        preview_right.grid(row=0, column=1, sticky="nsew")
-        preview_right.columnconfigure(0, weight=1)
-        preview_right.rowconfigure(0, weight=1) # 图片行将扩展
-
-        image_frame = ttk.LabelFrame(preview_right, text="图像校验")
-        image_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
-        image_frame.columnconfigure(0, weight=1)
-        image_frame.rowconfigure(0, weight=1)
-
-        self.validation_image_label = ttk.Label(image_frame, text="请从左侧列表选择处理后的图像", anchor="center")
-        self.validation_image_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        self.validation_image_label.bind("<Double-1>", self.on_image_double_click)
-        self.validation_image_label.bind('<Configure>', self._on_resize)
-
-        info_frame = ttk.LabelFrame(preview_right, text="检测信息")
-        info_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        self.validation_info_text = tk.Text(info_frame, height=3, font=NORMAL_FONT, wrap="word")
-        self.validation_info_text.pack(fill="both", expand=True, padx=5, pady=5)
-        self.validation_info_text.config(state="disabled")
-
-        validation_control_frame = ttk.Frame(preview_right)
-        validation_control_frame.grid(row=2, column=0, sticky="ew", pady=5)
-        self.validation_status_label = ttk.Label(validation_control_frame, text="未校验", font=NORMAL_FONT)
-        self.validation_status_label.pack(side="left", padx=5)
-        ttk.Label(validation_control_frame, text="进度:").pack(side="left", padx=(20, 5))
-        self.validation_progress_var = tk.StringVar(value="0/0")
-        ttk.Label(validation_control_frame, textvariable=self.validation_progress_var).pack(side="left")
-
-        buttons_frame = ttk.Frame(preview_right)
-        buttons_frame.grid(row=3, column=0, sticky="ew", pady=10)
-        self.correct_button = ttk.Button(buttons_frame, text="正确 ✅", command=lambda: self._mark_validation(True),
-                                         width=10)
-        self.correct_button.pack(side="left", padx=(0, 5))
-        self.incorrect_button = ttk.Button(buttons_frame, text="错误 ❌", command=lambda: self._mark_validation(False),
-                                           width=10)
-        self.incorrect_button.pack(side="left", padx=5)
-        self.export_excel_button = ttk.Button(buttons_frame, text="导出为Excel", command=self._export_validation_excel,
-                                              width=12, state="normal")
-        self.export_excel_button.pack(side="right", padx=(5, 0))
-        self.export_error_button = ttk.Button(buttons_frame, text="导出错误图片", command=self._export_error_images,
-                                              width=12)
-        self.export_error_button.pack(side="right", padx=5)
-
         self.validation_listbox.bind("<<ListboxSelect>>", self._on_validation_file_selected)
 
-    def rebind_keys(self):
-        """Unbinds old keys and binds new, case-insensitive keys."""
-        # 1. 解绑所有先前绑定的按键
-        for key_sequence in self.active_keybinds:
-            self.controller.master.unbind(key_sequence)
-            self.validation_listbox.unbind(key_sequence) # 同时解绑列表框上的按键
-        self.active_keybinds = []
+        self.validation_listbox.bind("<Up>", self._navigate_listbox_up)
+        self.validation_listbox.bind("<Down>", self._navigate_listbox_down)
 
-        # 2. 获取新的按键定义
-        key_map = {
-            "up": (self.controller.advanced_page.key_up_var.get(), self._select_prev_image),
-            "down": (self.controller.advanced_page.key_down_var.get(), self._select_next_image),
-            "correct": (self.controller.advanced_page.key_correct_var.get(), lambda e: self._mark_validation(True)),
-            "incorrect": (
-            self.controller.advanced_page.key_incorrect_var.get(), lambda e: self._mark_validation(False)),
-        }
+        # Right side: Content Area
+        right_pane = ttk.Frame(validation_content)
+        right_pane.grid(row=0, column=1, rowspan=2, sticky="nsew")
+        right_pane.columnconfigure(0, weight=1)
+        right_pane.rowconfigure(0, weight=1)
 
-        # 3. 根据按键功能，在不同层级上进行绑定
-        for action, (key_def, command) in key_map.items():
-            sequences_to_bind = []
-            # (处理大小写和特殊按键的逻辑保持不变)
-            match = re.fullmatch(r"<Key-([a-zA-Z0-9])>", key_def)
-            if match:
-                key_char = match.group(1)
-                if key_char.isalpha():
-                    sequences_to_bind.append(f"<Key-{key_char.lower()}>")
-                    sequences_to_bind.append(f"<Key-{key_char.upper()}>")
-                else:
-                    sequences_to_bind.append(key_def)
-            elif len(key_def) == 1 and key_def.isalpha():
-                sequences_to_bind.append(f"<Key-{key_def.lower()}>")
-                sequences_to_bind.append(f"<Key-{key_def.upper()}>")
-            else:
-                sequences_to_bind.append(key_def)
+        top_area_frame = ttk.Frame(right_pane)
+        top_area_frame.grid(row=0, column=0, sticky="nsew")
+        top_area_frame.columnconfigure(0, weight=1)
+        top_area_frame.rowconfigure(0, weight=1)
 
-            for seq in sequences_to_bind:
-                if seq not in self.active_keybinds:
-                    # **核心修改：根据功能决定绑定目标**
-                    if action in ["up", "down"]:
-                        # 导航键绑定在列表框上
-                        self.validation_listbox.bind(seq, command)
-                    else:
-                        # 功能键绑定在全局窗口上
-                        self.controller.master.bind(seq, command)
-                    self.active_keybinds.append(seq)
+        validation_image_display_frame = ttk.LabelFrame(top_area_frame, text="图片显示")
+        validation_image_display_frame.grid(row=0, column=0, sticky="nsew")
+        validation_image_display_frame.columnconfigure(0, weight=1)
+        validation_image_display_frame.rowconfigure(0, weight=1)
 
-    def _select_prev_image(self, event=None):
-        """Selects the previous image in the validation listbox."""
-        if self._is_navigating:
-            return "break"
+        self.validation_image_label = ttk.Label(validation_image_display_frame, anchor="center")
+        self.validation_image_label.grid(row=0, column=0, sticky="nsew")
+        self.validation_image_label.bind('<Configure>', self._on_resize)
+        self.validation_image_label.bind("<Double-1>", self.on_image_double_click)
 
-        if not self.validation_listbox.curselection():
-            return "break"
+        action_buttons_frame = ttk.LabelFrame(top_area_frame, text="快速标记")
+        action_buttons_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
 
-        current_index = self.validation_listbox.curselection()[0]
-        if current_index > 0:
-            self._is_navigating = True
-            next_index = current_index - 1
-            self.validation_listbox.selection_clear(0, tk.END)
-            self.validation_listbox.selection_set(next_index)
-            self.validation_listbox.see(next_index)
-            self.validation_listbox.event_generate("<<ListboxSelect>>")
-            self.master.after(100, lambda: setattr(self, '_is_navigating', False))
+        correct_button = ttk.Button(action_buttons_frame, text="正确", command=lambda: self._mark_validation(True))
+        correct_button.pack(fill="x", pady=5, padx=5)
 
-        return "break"  # <-- 确保此行存在
+        empty_button = ttk.Button(action_buttons_frame, text="空",
+                                  command=lambda: self._mark_validation_and_move_to_next(species_name="空", count="空"))
+        empty_button.pack(fill="x", pady=5, padx=5)
 
-    def _select_next_image(self, event=None):
-        """Selects the next image in the validation listbox."""
-        if self._is_navigating:
-            return "break"
+        self.validation_species_buttons_frame = ttk.Frame(action_buttons_frame)
+        self.validation_species_buttons_frame.pack(fill="x", pady=5, padx=5)
 
-        if not self.validation_listbox.curselection():
-            return "break"
+        ttk.Separator(action_buttons_frame, orient="horizontal").pack(fill="x", pady=5)
 
-        current_index = self.validation_listbox.curselection()[0]
-        if current_index < self.validation_listbox.size() - 1:
-            self._is_navigating = True
-            next_index = current_index + 1
-            self.validation_listbox.selection_clear(0, tk.END)
-            self.validation_listbox.selection_set(next_index)
-            self.validation_listbox.see(next_index)
-            self.validation_listbox.event_generate("<<ListboxSelect>>")
-            self.master.after(100, lambda: setattr(self, '_is_navigating', False))
+        other_button = ttk.Button(action_buttons_frame, text="其他", command=self._mark_validation_other_species)
+        other_button.pack(fill="x", pady=5, padx=5)
 
-        return "break"  # <-- 确保此行存在
+        self.validation_quantity_buttons_frame = ttk.LabelFrame(top_area_frame, text="数量")
+        self.validation_quantity_buttons_frame.grid(row=0, column=2, sticky="ns", padx=(10, 0))
+
+        for i in range(1, 11):
+            def create_command(num, btn):
+                return lambda: self._on_validation_quantity_button_press(num, btn)
+
+            btn = ttk.Button(self.validation_quantity_buttons_frame, text=str(i))
+            btn['command'] = create_command(i, btn)
+            btn.pack(fill="x", pady=2, padx=5)
+
+        more_button = ttk.Button(self.validation_quantity_buttons_frame, text="更多")
+        more_button['command'] = lambda b=more_button: self._on_validation_quantity_button_press("更多", b)
+        more_button.pack(fill="x", pady=2, padx=5)
+
+        bottom_area_frame = ttk.Frame(right_pane)
+        bottom_area_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        bottom_area_frame.columnconfigure(0, weight=1)
+
+        info_slider_frame = ttk.LabelFrame(bottom_area_frame, text="检测信息与设置", padding=(30, 5))
+        info_slider_frame.grid(row=0, column=0, sticky="ew")
+        info_slider_frame.columnconfigure(0, weight=1)
+
+        self.validation_status_label = ttk.Label(info_slider_frame, text="未校验", font=NORMAL_FONT)
+        self.validation_status_label.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+
+        conf_slider = ttk.Scale(info_slider_frame, from_=0.05, to=0.95, orient="horizontal",
+                                variable=self.validation_conf_var,
+                                command=self._on_validation_confidence_slider_changed)
+        conf_slider.grid(row=1, column=0, sticky="ew", padx=(10, 5), pady=(0, 5))
+
+        self.validation_conf_label = ttk.Label(info_slider_frame, text="0.25", font=NORMAL_FONT)
+        self.validation_conf_label.grid(row=1, column=1, sticky="w", padx=(0, 10), pady=(0, 5))
+
+        export_options_frame = ttk.LabelFrame(bottom_area_frame, text="导出选项", padding=(10, 5))
+        export_options_frame.grid(row=0, column=1, sticky="e", padx=(10, 0))
+
+        format_combo = ttk.Combobox(
+            export_options_frame,
+            textvariable=self.export_format_var,
+            values=["CSV", "Excel", "错误照片"],
+            width=8,
+            state="readonly",
+            takefocus=False
+        )
+        format_combo.pack(side="left", padx=(0, 5), pady=5)
+
+        export_button = ttk.Button(export_options_frame, text="导出",
+                                   command=self._dispatch_export,
+                                   takefocus=False)
+        export_button.pack(side="left", padx=(0, 5), pady=5)
 
     def _on_preview_tab_changed(self, event):
         selected_tab = self.preview_notebook.select()
         tab_text = self.preview_notebook.tab(selected_tab, "text")
-        if tab_text == "检验校验(时间)":
+
+        if tab_text == "图像预览":
+            # 切换到预览页时，尝试恢复之前的选择
+            if self.last_selected_preview_image:
+                try:
+                    all_files = self.file_listbox.get(0, tk.END)
+                    if self.last_selected_preview_image in all_files:
+                        idx = all_files.index(self.last_selected_preview_image)
+                        self.file_listbox.selection_set(idx)
+                        self.file_listbox.see(idx)
+                        self.file_listbox.event_generate("<<ListboxSelect>>")
+                except ValueError:
+                    self.last_selected_preview_image = None  # 如果找不到，则清除状态
+
+        elif tab_text == "检验校验(时间)":
             self._load_processed_images()
-            self.validation_listbox.focus_set()  # <-- 将焦点直接设置在列表框上
-            self.rebind_keys()
+            self.validation_listbox.focus_set()
+            self._load_validation_species_buttons()
+
+            # 加载全局置信度设置
+            global_conf = self.controller.confidence_settings.get("global", 0.25)
+            self.validation_conf_var.set(global_conf)
+            if self.validation_conf_label:
+                self.validation_conf_label.config(text=f"{global_conf:.2f}")
+
+            # 尝试恢复之前的选择
+            restored = False
+            if self.last_selected_validation_image:
+                try:
+                    all_files = self.validation_listbox.get(0, tk.END)
+                    if self.last_selected_validation_image in all_files:
+                        idx = all_files.index(self.last_selected_validation_image)
+                        self.validation_listbox.selection_set(idx)
+                        self.validation_listbox.see(idx)
+                        self.validation_listbox.event_generate("<<ListboxSelect>>")
+                        restored = True
+                except ValueError:
+                    self.last_selected_validation_image = None
+
+            # 如果没有恢复之前的选择，则执行默认选择逻辑
+            if not restored and self.validation_listbox.size() > 0:
+                unvalidated_index = next(
+                    (i for i, f in enumerate(self.validation_listbox.get(0, tk.END)) if f not in self.validation_data),
+                    -1)
+                if unvalidated_index != -1:
+                    self.validation_listbox.selection_set(unvalidated_index)
+                    self.validation_listbox.see(unvalidated_index)
+                else:
+                    self.validation_listbox.selection_set(0)
+                # 触发事件以加载图片
+                self.validation_listbox.event_generate("<<ListboxSelect>>")
+
         elif tab_text == "检验校验(物种)":
             self._load_species_data()
+            # 恢复之前选择的物种焦点
+            if self.current_selected_species:
+                try:
+                    all_species = self.species_listbox.get(0, tk.END)
+                    if self.current_selected_species in all_species:
+                        idx = all_species.index(self.current_selected_species)
+                        self.species_listbox.selection_set(idx)
+                        self.species_listbox.see(idx)
+                        self.species_listbox.event_generate("<<ListboxSelect>>")
+
+                        # 在恢复物种后，进一步恢复该物种下的图片选择
+                        if self.last_selected_species_image:
+                            self.master.after(50, self._restore_species_photo_selection)
+
+                except ValueError:
+                    self.current_selected_species = None
+                    self.species_photo_listbox.delete(0, tk.END)
+
+    def _restore_species_photo_selection(self):
+        """在物种列表加载后，恢复照片列表的选择"""
+        try:
+            all_photos = self.species_photo_listbox.get(0, tk.END)
+            if self.last_selected_species_image in all_photos:
+                idx = all_photos.index(self.last_selected_species_image)
+                self.species_photo_listbox.selection_set(idx)
+                self.species_photo_listbox.see(idx)
+                self.species_photo_listbox.event_generate("<<ListboxSelect>>")
+        except ValueError:
+            self.last_selected_species_image = None
 
     def update_file_list(self, directory: str):
         # The clearing is now done in clear_previews, called from main_window
@@ -429,31 +536,43 @@ class PreviewPage(ttk.Frame):
         self.controller.master.update_idletasks()
 
         file_name = self.file_listbox.get(selection[0])
+        self.last_selected_preview_image = file_name
         file_path = os.path.join(self.controller.start_page.file_path_entry.get(), file_name)
+
+        # Reset states for the new image
         self.current_image_path = file_path
         self.current_detection_results = None
+        self.current_preview_info = {}
+        self.show_detection_var.set(False)
 
+        # Load and display the original image without any boxes first
+        self.update_image_preview(file_path)
+        # Update text-based info
         self.update_image_info(file_path, file_name)
 
+        # Check if a JSON file with detection results exists
         photo_path = self.controller.get_temp_photo_dir()
         if not photo_path: return
 
-        temp_result_path = os.path.join(photo_path, file_name)
         base_name, _ = os.path.splitext(file_name)
         json_path = os.path.join(photo_path, f"{base_name}.json")
 
-        if os.path.exists(temp_result_path) and os.path.exists(json_path):
-            self.show_detection_var.set(True)
-            self.update_image_preview(temp_result_path, is_temp_result=True)
+        if os.path.exists(json_path):
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
-                    detection_info = json.load(f)
-                self._update_detection_info(detection_info)
+                    # Load the detection info
+                    self.current_preview_info = json.load(f)
+
+                # Update the text part of the info display
+                self._update_detection_info(self.current_preview_info)
+
+                # Since we have results, check the "show detection" box
+                # The trace on this var will trigger toggle_detection_preview, which will then call the redraw function
+                self.show_detection_var.set(True)
             except Exception as e:
                 logger.error(f"读取检测JSON失败: {e}")
-        else:
-            self.show_detection_var.set(False)
-            self.update_image_preview(file_path)
+                self.current_preview_info = {}
+                self._update_detection_info({}) # Clear text info as well
 
     def update_image_preview(self, file_path: str, show_detection: bool = False, detection_results=None,
                              is_temp_result: bool = False):
@@ -504,22 +623,16 @@ class PreviewPage(ttk.Frame):
             self.show_detection_var.set(False)
             return
 
-        file_name = self.file_listbox.get(selection[0])
-        file_path = os.path.join(self.controller.start_page.file_path_entry.get(), file_name)
-
         if self.show_detection_var.get():
-            photo_path = self.controller.get_temp_photo_dir()
-            if not photo_path: return
-            temp_result_path = os.path.join(photo_path, file_name)
-            if os.path.exists(temp_result_path):
-                self.update_image_preview(temp_result_path, is_temp_result=True)
-            elif self.current_detection_results:
-                self.update_image_preview(file_path, True, self.current_detection_results)
+            # 我们需要检测信息来绘制检测框
+            if self.current_preview_info:
+                self._redraw_preview_boxes_with_new_confidence(self.preview_conf_var.get())
             else:
                 messagebox.showinfo("提示", '当前图像尚未检测，请点击"检测当前图像"按钮。')
                 self.show_detection_var.set(False)
         else:
-            self.update_image_preview(file_path)
+            # 只显示不带检测框的原始图片
+            self.update_image_preview(self.current_image_path)
 
     def detect_current_image(self):
         selection = self.file_listbox.curselection()
@@ -547,20 +660,23 @@ class PreviewPage(ttk.Frame):
 
             if self.current_detection_results:
                 temp_photo_dir = self.controller.get_temp_photo_dir()
-                self.controller.image_processor.save_detection_temp(self.current_detection_results, filename,
-                                                                    temp_photo_dir)
-                self.controller.image_processor.save_detection_info_json(self.current_detection_results, filename,
-                                                                         species_info, temp_photo_dir)
+                # 保存JSON文件
+                json_path = self.controller.image_processor.save_detection_info_json(self.current_detection_results, filename, species_info,
+                                                                      temp_photo_dir)
 
-            self.master.after(0, lambda: self.show_detection_var.set(True))
-            self.master.after(0, lambda: self.update_image_preview(img_path, True, self.current_detection_results))
-            self.master.after(0, lambda: self._update_detection_info(species_info))
+                # 从刚保存的JSON中读回数据以填充 self.current_preview_info
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    loaded_detection_info = json.load(f)
+
+                # 在主线程中更新UI
+                self.master.after(0, lambda: setattr(self, 'current_preview_info', loaded_detection_info))
+                self.master.after(0, lambda: self._update_detection_info(species_info))
+                self.master.after(0, lambda: self.show_detection_var.set(True)) # 这将触发重绘
         except Exception as err:
             logger.error(f"检测图像失败: {err}")
             self.master.after(0, lambda msg=str(err): messagebox.showerror("错误", f"检测图像失败: {msg}"))
         finally:
             self.master.after(0, lambda: self.detect_button.config(state="normal"))
-            # self.master.after(0, lambda: self.controller.status_bar.status_label.config(text="检测完成"))
 
     def _update_detection_info(self, species_info):
         self.info_text.config(state="normal")
@@ -602,57 +718,96 @@ class PreviewPage(ttk.Frame):
 
     def _load_processed_images(self):
         photo_dir = self.controller.get_temp_photo_dir()
-        if not photo_dir or not os.path.exists(photo_dir):
+        source_dir = self.controller.start_page.file_path_entry.get()
+
+        if not photo_dir or not os.path.exists(photo_dir) or not source_dir:
+            self.validation_listbox.delete(0, tk.END) # 如果路径无效，则清空列表
             return
+
         self.validation_listbox.delete(0, tk.END)
-        processed_images = sorted([f for f in os.listdir(photo_dir) if f.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS)])
+
+        # 获取temp目录下的所有json文件
+        try:
+            json_files = [f for f in os.listdir(photo_dir) if f.lower().endswith('.json')]
+        except FileNotFoundError:
+            logger.error(f"临时目录未找到: {photo_dir}")
+            return
+
+        # 获取源目录下的所有支持的图片文件，并创建一个从基础文件名到完整文件名的映射
+        try:
+            source_images = [f for f in os.listdir(source_dir) if f.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS)]
+            image_basename_map = {os.path.splitext(f)[0]: f for f in source_images}
+        except FileNotFoundError:
+            logger.error(f"源目录未找到: {source_dir}")
+            return
+
+        processed_images = []
+        for json_file in json_files:
+            base_name = os.path.splitext(json_file)[0]
+            image_filename = image_basename_map.get(base_name)
+            if image_filename:
+                processed_images.append(image_filename)
+
+        processed_images.sort()
+
         for file in processed_images:
             self.validation_listbox.insert(tk.END, file)
+
         self._update_validation_progress()
-        if processed_images:
-            unvalidated_index = next((i for i, f in enumerate(processed_images) if f not in self.validation_data), -1)
-            if unvalidated_index != -1:
-                self.validation_listbox.selection_set(unvalidated_index)
-                self.validation_listbox.see(unvalidated_index)
-            else:
-                self.validation_listbox.selection_set(0)
-            self._on_validation_file_selected(None)
 
     def _on_validation_file_selected(self, event):
+        self._species_validation_marked = None
+        self._count_validation_marked = None
+
+        if self._selected_validation_species_button and self._selected_validation_species_button.winfo_exists():
+            self._selected_validation_species_button.configure(style="TButton")
+            self._selected_validation_species_button = None
+        if self._selected_validation_quantity_button and self._selected_validation_quantity_button.winfo_exists():
+            self._selected_validation_quantity_button.configure(style="TButton")
+            self._selected_validation_quantity_button = None
+
         selection = self.validation_listbox.curselection()
         if not selection:
+            self.validation_status_label.config(text="请从左侧列表选择处理后的图像")
             return
+
         file_name = self.validation_listbox.get(selection[0])
+        self.last_selected_validation_image = file_name
         photo_dir = self.controller.get_temp_photo_dir()
         if not photo_dir: return
-        file_path = os.path.join(photo_dir, file_name)
+
+        original_image_path = os.path.join(self.controller.start_page.file_path_entry.get(), file_name)
         try:
-            img = Image.open(file_path)
-            self.validation_original_image = img  # 保存原始图像
-            resized_img = self._resize_image_to_fit(img, self.validation_image_label.winfo_width(),
-                                                    self.validation_image_label.winfo_height())
-            photo = ImageTk.PhotoImage(resized_img)
-            self.validation_image_label.config(image=photo)
-            self.validation_image_label.image = photo
+            self.validation_original_image = Image.open(original_image_path)
         except Exception as e:
-            logger.error(f"加载校验图像失败: {e}")
-            self.validation_original_image = None  # 加载失败时清除
+            logger.error(f"加载原始校验图像失败: {e}")
+            self.validation_original_image = None
+            self.validation_image_label.config(image='', text="无法加载原始图像")
+            if hasattr(self.validation_image_label, 'image'):
+                self.validation_image_label.image = None
+            return
 
         json_path = os.path.join(photo_dir, f"{os.path.splitext(file_name)[0]}.json")
-        self.validation_info_text.config(state="normal")
-        self.validation_info_text.delete(1.0, tk.END)
+
         if os.path.exists(json_path):
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
-                    info = json.load(f)
-                info_text = f"物种: {info.get('物种名称', 'N/A')}\n数量: {info.get('物种数量', 'N/A')}\n置信度: {info.get('最低置信度', 'N/A')}"
-                self.validation_info_text.insert(tk.END, info_text)
-            except:
-                pass
-        self.validation_info_text.config(state="disabled")
-        status = self.validation_data.get(file_name)
-        self.validation_status_label.config(
-            text=f"已标记: {'正确 ✅' if status is True else '错误 ❌' if status is False else '未校验'}")
+                    self.current_validation_info = json.load(f)
+
+                self._recalculate_and_update_info_label(
+                    self.validation_status_label,
+                    self.current_validation_info,
+                    self.validation_conf_var.get()
+                )
+
+                self._redraw_validation_boxes_with_new_confidence(self.validation_conf_var.get())
+
+            except Exception as e:
+                logger.error(f"加载JSON信息失败: {e}")
+                self.validation_status_label.config(text="加载信息失败")
+        else:
+            self.validation_status_label.config(text="物种: - | 数量: - | 置信度: -")
+            self._redraw_validation_boxes_with_new_confidence(1.1)
 
     def _mark_validation(self, is_correct):
         selection = self.validation_listbox.curselection()
@@ -738,12 +893,24 @@ class PreviewPage(ttk.Frame):
                     f.seek(0)
                     json.dump(data, f, ensure_ascii=False, indent=4)
                     f.truncate()
+
+                    self.current_species_info = data
+                    self._update_species_info_label()
+
             except Exception as e:
                 logger.error(f"更新JSON文件失败 ({file_name}): {e}")
                 messagebox.showerror("错误", f"更新JSON文件失败: {e}", parent=self)
 
         # 立即刷新右侧信息显示
         self._on_validation_file_selected(None)
+
+    def _update_species_info_label(self):
+        """辅助函数，用于从 self.current_species_info 更新物种信息标签"""
+        if self.species_info_label and self.current_species_info:
+            info_text = (f"物种: {self.current_species_info.get('物种名称', 'N/A')} | "
+                         f"数量: {self.current_species_info.get('物种数量', 'N/A')} | "
+                         f"置信度: {self.current_species_info.get('最低置信度', 'N/A')}")
+            self.species_info_label.config(text=info_text)
 
     def _export_error_images(self):
         error_files = [f for f, v in self.validation_data.items() if v is False]
@@ -801,13 +968,14 @@ class PreviewPage(ttk.Frame):
         else:
             messagebox.showinfo("成功", message, parent=self)
 
-    def _export_validation_excel(self):
-        """从校验页面的数据导出为Excel"""
+    def _export_validation_data(self):
+        """从校验页面的数据导出为表格文件（Excel或CSV）"""
         temp_dir = self.controller.get_temp_photo_dir()
         source_dir = self.controller.start_page.file_path_entry.get()
 
         if not temp_dir or not os.path.exists(temp_dir) or not source_dir:
-            messagebox.showerror("错误", "无法找到临时文件或源文件路径，请确保已进行批处理并且路径设置正确。", parent=self)
+            messagebox.showerror("错误", "无法找到临时文件或源文件路径，请确保已进行批处理并且路径设置正确。",
+                                 parent=self)
             return
 
         json_files = [f for f in os.listdir(temp_dir) if f.lower().endswith('.json')]
@@ -815,12 +983,25 @@ class PreviewPage(ttk.Frame):
             messagebox.showinfo("提示", "没有找到任何处理后的数据，无法导出。", parent=self)
             return
 
+        # 根据下拉框选择确定文件类型
+        file_format = self.export_format_var.get().lower()
+        if file_format == 'excel':
+            file_types = [("Excel 文件", "*.xlsx"), ("所有文件", "*.*")]
+            default_extension = ".xlsx"
+            initial_file = "校验结果.xlsx"
+        elif file_format == 'csv':
+            file_types = [("CSV 文件", "*.csv"), ("所有文件", "*.*")]
+            default_extension = ".csv"
+            initial_file = "校验结果.csv"
+        else:
+            return  # 如果格式未知则不执行操作
+
         # 弹出文件保存对话框
         output_path = filedialog.asksaveasfilename(
-            title="选择Excel保存位置",
-            defaultextension=".xlsx",
-            filetypes=[("Excel 文件", "*.xlsx"), ("所有文件", "*.*")],
-            initialfile="校验结果.xlsx",
+            title="选择表格保存位置",
+            defaultextension=default_extension,
+            filetypes=file_types,
+            initialfile=initial_file,
             parent=self
         )
 
@@ -828,16 +1009,20 @@ class PreviewPage(ttk.Frame):
         if not output_path:
             return
 
+        # 加载置信度配置文件
+        confidence_settings = self.controller.settings_manager.load_confidence_settings()
+        if not confidence_settings:
+            confidence_settings = {}
+
         all_image_data = []
         earliest_date = None
 
         for json_file in json_files:
             json_path = os.path.join(temp_dir, json_file)
-            image_filename = os.path.splitext(json_file)[0] + ".jpg" # 假设原始文件是.jpg
+            image_filename = os.path.splitext(json_file)[0] + ".jpg"
             image_path = os.path.join(source_dir, image_filename)
 
             if not os.path.exists(image_path):
-                # 尝试其他可能的扩展名
                 found_image = False
                 for ext in SUPPORTED_IMAGE_EXTENSIONS:
                     temp_path = os.path.join(source_dir, os.path.splitext(json_file)[0] + ext)
@@ -850,23 +1035,15 @@ class PreviewPage(ttk.Frame):
                     continue
 
             try:
-                # 1. 提取元数据
                 metadata, _ = ImageMetadataExtractor.extract_metadata(image_path, os.path.basename(image_path))
-
-                # 2. 读取JSON数据
                 with open(json_path, 'r', encoding='utf-8') as f:
                     json_data = json.load(f)
-
-                # 3. 合并数据
                 metadata.update(json_data)
                 all_image_data.append(metadata)
-
-                # 4. 找到最早日期
                 date_taken = metadata.get('拍摄日期对象')
                 if date_taken:
                     if earliest_date is None or date_taken < earliest_date:
                         earliest_date = date_taken
-
             except Exception as e:
                 logger.error(f"处理文件 {json_file} 时出错: {e}")
 
@@ -874,13 +1051,13 @@ class PreviewPage(ttk.Frame):
             messagebox.showerror("错误", "未能成功处理任何数据，无法导出。", parent=self)
             return
 
-        # 使用DataProcessor处理数据
-        processed_data = DataProcessor.process_independent_detection(all_image_data)
+        processed_data = DataProcessor.process_independent_detection(all_image_data, confidence_settings)
         if earliest_date:
             processed_data = DataProcessor.calculate_working_days(processed_data, earliest_date)
 
-        # 导出到Excel
-        success = DataProcessor.export_to_excel(processed_data, output_path)
+        # 传递选择的文件格式
+        success = DataProcessor.export_to_excel(processed_data, output_path, confidence_settings,
+                                                file_format=file_format)
 
         if success:
             if messagebox.askyesno("成功", f"数据已成功导出到:\n{output_path}\n\n是否立即打开文件？", parent=self):
@@ -889,7 +1066,7 @@ class PreviewPage(ttk.Frame):
                 except Exception as e:
                     messagebox.showerror("错误", f"无法打开文件: {e}", parent=self)
         else:
-            messagebox.showerror("导出失败", "导出Excel文件时发生错误，请查看日志文件获取详情。", parent=self)
+            messagebox.showerror("导出失败", "导出文件时发生错误，请查看日志文件获取详情。", parent=self)
 
     def _on_resize(self, event):
         # 确定是哪个标签触发了事件
@@ -921,11 +1098,8 @@ class PreviewPage(ttk.Frame):
             label_widget.image = photo
 
     def _on_species_photo_selected(self, event):
-        self._species_marked = None
         self._count_marked = None
-        self.current_species_info = {}
 
-        # 重置所有标记按钮的样式
         if self._selected_species_button and self._selected_species_button.winfo_exists():
             self._selected_species_button.configure(style="TButton")
             self._selected_species_button = None
@@ -939,69 +1113,58 @@ class PreviewPage(ttk.Frame):
             return
 
         file_name = self.species_photo_listbox.get(selection[0])
+        self.last_selected_species_image = file_name
         photo_dir = self.controller.get_temp_photo_dir()
         if not photo_dir:
             return
 
-        file_path = os.path.join(photo_dir, file_name)
+        original_image_path = os.path.join(self.controller.start_page.file_path_entry.get(), file_name)
+        try:
+            self.species_validation_original_image = Image.open(original_image_path)
+        except Exception as e:
+            logger.error(f"加载原始物种校验图像失败: {e}")
+            self.species_validation_original_image = None
+            self.species_image_label.config(image='', text="无法加载原始图像")
+            if hasattr(self.species_image_label, 'image'):
+                self.species_image_label.image = None
+            return
+
         json_path = os.path.join(photo_dir, f"{os.path.splitext(file_name)[0]}.json")
 
-        # 加载并显示检测信息
         if os.path.exists(json_path):
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     self.current_species_info = json.load(f)
 
-                info_text = (f"物种: {self.current_species_info.get('物种名称', 'N/A')} | "
-                             f"数量: {self.current_species_info.get('物种数量', 'N/A')} | "
-                             f"置信度: {self.current_species_info.get('最低置信度', 'N/A')}")
-                self.species_info_label.config(text=info_text)
+                self._recalculate_and_update_info_label(
+                    self.species_info_label,
+                    self.current_species_info,
+                    self.species_conf_var.get()
+                )
+
+                self._redraw_boxes_with_new_confidence(self.species_conf_var.get())
+
             except Exception as e:
                 logger.error(f"加载JSON信息失败: {e}")
                 self.species_info_label.config(text="加载信息失败")
         else:
             self.species_info_label.config(text="物种: - | 数量: - | 置信度: -")
+            self._redraw_boxes_with_new_confidence(1.1)
 
-        # 根据置信度决定显示哪个图像
-        show_detected_image = False
-        min_conf_str = self.current_species_info.get('最低置信度', '0')
-        if min_conf_str and min_conf_str != '人工校验':
-            try:
-                min_conf = float(min_conf_str)
-                slider_conf = self.species_conf_var.get()
-                if min_conf >= slider_conf:
-                    show_detected_image = True
-            except (ValueError, TypeError):
-                pass
-
-        image_path_to_show = file_path if show_detected_image else os.path.join(
-            self.controller.start_page.file_path_entry.get(), file_name)
-
-        try:
-            img = Image.open(image_path_to_show)
-            self.species_validation_original_image = img
-            resized_img = self._resize_image_to_fit(img, self.species_image_display_frame.winfo_width(),
-                                                    self.species_image_display_frame.winfo_height())
-            photo = ImageTk.PhotoImage(resized_img)
-            self.species_image_label.config(image=photo)
-            self.species_image_label.image = photo
-        except Exception as e:
-            logger.error(f"加载物种校验图像失败: {e}")
-            self.species_validation_original_image = None
 
     def _create_species_validation_content(self, parent):
-        # --- Style for selected buttons ---
         style = ttk.Style()
+
+        text_color = "white" if self.controller.is_dark_mode else "black"
         style.map("Selected.TButton",
                   background=[('!active', self.controller.accent_color), ('active', self.controller.accent_color)],
-                  foreground=[('!active', 'white'), ('active', 'white')])
+                  foreground=[('!active', text_color), ('active', text_color)])
 
         content = ttk.Frame(parent)
         content.pack(fill="both", expand=True)
         content.columnconfigure(1, weight=1)
         content.rowconfigure(0, weight=1)
 
-        # Left side: Species List and Photo List
         left_pane = ttk.Frame(content)
         left_pane.grid(row=0, column=0, rowspan=2, sticky="ns", padx=(0, 10))
         left_pane.rowconfigure(0, weight=1)
@@ -1014,7 +1177,8 @@ class PreviewPage(ttk.Frame):
 
         self.species_listbox = tk.Listbox(species_list_frame, width=25, font=NORMAL_FONT,
                                           selectbackground=self.controller.sidebar_bg,
-                                          selectforeground=self.controller.sidebar_fg)
+                                          selectforeground=self.controller.sidebar_fg,
+                                          exportselection=False)
         self.species_listbox.grid(row=0, column=0, sticky="nsew")
 
         species_scrollbar = ttk.Scrollbar(species_list_frame, orient="vertical", command=self.species_listbox.yview)
@@ -1027,7 +1191,13 @@ class PreviewPage(ttk.Frame):
         photo_list_frame.rowconfigure(0, weight=1)
         photo_list_frame.columnconfigure(0, weight=1)
 
-        self.species_photo_listbox = tk.Listbox(photo_list_frame, width=25, font=NORMAL_FONT)
+        self.species_photo_listbox = tk.Listbox(photo_list_frame,
+                                                width=25,
+                                                font=NORMAL_FONT,
+                                                selectbackground=self.controller.sidebar_bg,
+                                                selectforeground=self.controller.sidebar_fg,
+                                                exportselection=False
+                                                )
         self.species_photo_listbox.grid(row=0, column=0, sticky="nsew")
 
         photo_scrollbar = ttk.Scrollbar(photo_list_frame, orient="vertical", command=self.species_photo_listbox.yview)
@@ -1035,19 +1205,19 @@ class PreviewPage(ttk.Frame):
         self.species_photo_listbox.config(yscrollcommand=photo_scrollbar.set)
         self.species_photo_listbox.bind("<<ListboxSelect>>", self._on_species_photo_selected)
 
-        # Right side: Contains image, info, and all button sets
+        self.species_photo_listbox.bind("<Up>", self._navigate_listbox_up)
+        self.species_photo_listbox.bind("<Down>", self._navigate_listbox_down)
+
         right_pane = ttk.Frame(content)
         right_pane.grid(row=0, column=1, rowspan=2, sticky="nsew")
         right_pane.columnconfigure(0, weight=1)
-        right_pane.rowconfigure(0, weight=1)  # Main content area expands
+        right_pane.rowconfigure(0, weight=1)
 
-        # Frame for the top part (image and side buttons)
         top_area_frame = ttk.Frame(right_pane)
         top_area_frame.grid(row=0, column=0, sticky="nsew")
         top_area_frame.columnconfigure(0, weight=1)
         top_area_frame.rowconfigure(0, weight=1)
 
-        # Image display area
         self.species_image_display_frame = ttk.LabelFrame(top_area_frame, text="图片显示")
         self.species_image_display_frame.grid(row=0, column=0, sticky="nsew")
         self.species_image_display_frame.columnconfigure(0, weight=1)
@@ -1057,7 +1227,6 @@ class PreviewPage(ttk.Frame):
         self.species_image_label.grid(row=0, column=0, sticky="nsew")
         self.species_image_label.bind('<Configure>', self._on_resize)
 
-        # Action buttons on the far right (Vertical alignment)
         action_buttons_frame = ttk.LabelFrame(top_area_frame, text="快速标记")
         action_buttons_frame.grid(row=0, column=1, sticky="ns", padx=(10, 0))
 
@@ -1077,7 +1246,6 @@ class PreviewPage(ttk.Frame):
         other_button = ttk.Button(action_buttons_frame, text="其他", command=self._mark_other_species)
         other_button.pack(fill="x", pady=5, padx=5)
 
-        # Quantity buttons to the right of species buttons (Vertical alignment)
         self.quantity_buttons_frame = ttk.LabelFrame(top_area_frame, text="数量")
         self.quantity_buttons_frame.grid(row=0, column=2, sticky="ns", padx=(10, 0))
 
@@ -1093,75 +1261,123 @@ class PreviewPage(ttk.Frame):
         more_button['command'] = lambda b=more_button: self._on_quantity_button_press("更多", b)
         more_button.pack(fill="x", pady=2, padx=5)
 
-        # Frame for the bottom part (info, slider, and export)
         bottom_area_frame = ttk.Frame(right_pane)
         bottom_area_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         bottom_area_frame.columnconfigure(0, weight=1)
 
-        # Info and Slider Frame
-        info_slider_frame = ttk.LabelFrame(bottom_area_frame, text="检测信息与设置")
+        info_slider_frame = ttk.LabelFrame(bottom_area_frame, text="检测信息与设置", padding=(30, 5))
         info_slider_frame.grid(row=0, column=0, sticky="ew")
         info_slider_frame.columnconfigure(0, weight=1)
 
-        self.species_info_label = ttk.Label(info_slider_frame, text="物种: - | 数量: - | 置信度: -", font=NORMAL_FONT)
+        self.species_info_label = ttk.Label(info_slider_frame, text="物种:  | 数量:  | 置信度: ", font=NORMAL_FONT)
         self.species_info_label.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
-        conf_slider = ttk.Scale(info_slider_frame, from_=0.05, to=0.95, orient="horizontal",
-                                variable=self.species_conf_var, command=self._on_confidence_slider_changed)
-        conf_slider.grid(row=1, column=0, sticky="ew", padx=(10, 5), pady=(0, 5))
+        self.species_conf_slider = ttk.Scale(info_slider_frame, from_=0.05, to=0.95, orient="horizontal",
+                                             variable=self.species_conf_var, command=self._on_confidence_slider_changed)
+        self.species_conf_slider.grid(row=1, column=0, sticky="ew", padx=(10, 5), pady=(0, 5))
 
         self.species_conf_label = ttk.Label(info_slider_frame, text="0.25", font=NORMAL_FONT)
         self.species_conf_label.grid(row=1, column=1, sticky="w", padx=(0, 10), pady=(0, 5))
 
-        # Export Options Frame
-        export_options_frame = ttk.LabelFrame(bottom_area_frame, text="导出选项")
+        export_options_frame = ttk.LabelFrame(bottom_area_frame, text="导出选项", padding=(10, 5))
         export_options_frame.grid(row=0, column=1, sticky="e", padx=(10, 0))
 
-        export_error_button = ttk.Button(export_options_frame, text="导出错误图片", command=self._export_error_images)
-        export_error_button.pack(side="left", padx=5, pady=5)
+        format_combo = ttk.Combobox(
+            export_options_frame,
+            textvariable=self.export_format_var,
+            values=["CSV", "Excel", "错误照片"],
+            width=8,
+            state="readonly",
+            takefocus=False
+        )
+        format_combo.pack(side="left", padx=(0, 5), pady=5)
 
-        export_excel_button = ttk.Button(export_options_frame, text="导出为Excel",
-                                         command=self._export_validation_excel)
-        export_excel_button.pack(side="left", padx=5, pady=5)
+        export_button = ttk.Button(export_options_frame, text="导出",
+                                   command=self._dispatch_export,
+                                   takefocus=False)
+        export_button.pack(side="left", padx=(0, 5), pady=5)
 
     def _load_species_data(self):
         photo_dir = self.controller.get_temp_photo_dir()
-        if not photo_dir or not os.path.exists(photo_dir):
+        source_dir = self.controller.start_page.file_path_entry.get()
+
+        if not photo_dir or not os.path.exists(photo_dir) or not source_dir:
             return
 
         self.species_listbox.delete(0, tk.END)
         self.species_image_map.clear()
 
-        all_files = os.listdir(photo_dir)
-        json_files = [f for f in all_files if f.lower().endswith('.json')]
-        image_files = [f for f in all_files if f.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS)]
+        confidence_settings = self.controller.confidence_settings
 
-        # 创建一个从无扩展名的文件名到完整带扩展名文件名的映射
-        image_basename_map = {os.path.splitext(f)[0]: f for f in image_files}
+        try:
+            json_files = [f for f in os.listdir(photo_dir) if f.lower().endswith('.json') and f != 'validation.json']
+        except FileNotFoundError:
+            logger.error(f"临时目录未找到: {photo_dir}")
+            return
 
-        all_species = set()
+        try:
+            source_images = [f for f in os.listdir(source_dir) if f.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS)]
+            image_basename_map = {os.path.splitext(f)[0]: f for f in source_images}
+        except FileNotFoundError:
+            logger.error(f"源目录未找到: {source_dir}")
+            return
+
+        all_species_keys = set()
 
         for json_file in json_files:
             base_name = os.path.splitext(json_file)[0]
-            # 从映射中查找对应的图片文件名，以保留其原始大小写
             image_filename = image_basename_map.get(base_name)
 
             if not image_filename:
-                continue  # 如果没有找到对应的图片，则跳过
+                continue
 
             json_path = os.path.join(photo_dir, json_file)
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    species_names = data.get("物种名称", "").split(',')
-                    for species in species_names:
-                        if species and species != '空':
-                            all_species.add(species)
-                            self.species_image_map[species].append(image_filename)
+
+                # 存储这张图片对应的有效物种名称
+                final_species_for_image = set()
+
+                # 如果是人工校验过的，直接使用其物种名称
+                if data.get('最低置信度') == '人工校验':
+                    species_names_list = data.get("物种名称", "").split(',')
+                    # 清理并去重
+                    final_species_for_image = {s.strip() for s in species_names_list if s.strip() and s.strip() != '空'}
+
+                # 如果不是人工校验，则根据置信度阈值过滤
+                else:
+                    confidences = data.get('all_confidences', [])
+                    classes = data.get('all_classes', [])
+                    names_map = data.get('names_map', {})
+
+                    if confidences and classes and names_map:
+                        for cls, conf in zip(classes, confidences):
+                            species_name = names_map.get(str(int(cls)))
+                            if species_name:
+                                threshold = confidence_settings.get(species_name,
+                                                                    confidence_settings.get("global", 0.25))
+                                if conf >= threshold:
+                                    final_species_for_image.add(species_name)
+
+                # 根据过滤或解析后的物种列表，生成唯一的key并分类
+                if not final_species_for_image:
+                    species_key = "标记为空"
+                else:
+                    # 通过排序和组合，为物种组合创建唯一的键 (e.g., "物种A,物种B,物种C")
+                    # 这个逻辑对任意数量的物种都有效
+                    species_key = ",".join(sorted(list(final_species_for_image)))
+
+                all_species_keys.add(species_key)
+                self.species_image_map[species_key].append(image_filename)
+
             except Exception as e:
                 logger.error(f"加载物种数据失败 ({json_file}): {e}")
 
-        for species in sorted(list(all_species)):
+        # 将物种列表排序，并确保“标记为空”在列表末尾
+        sorted_species = sorted(list(all_species_keys), key=lambda x: (x == "标记为空", x))
+
+        for species in sorted_species:
             self.species_listbox.insert(tk.END, species)
 
         self._load_species_buttons()
@@ -1171,23 +1387,40 @@ class PreviewPage(ttk.Frame):
         if not selection:
             return
 
+        # 清空照片列表和信息显示
         self.species_photo_listbox.delete(0, tk.END)
         self.species_image_label.config(image='')
         if hasattr(self.species_image_label, 'image'):
             self.species_image_label.image = None
-        self.species_info_label.config(text="物种: - | 数量: - | 置信度: -")
+        self.species_info_label.config(text="物种:  | 数量:  | 置信度: ")
 
-        species_name = self.species_listbox.get(selection[0])
-        self.current_selected_species = species_name
-        image_files = self.species_image_map.get(species_name, [])
+        species_name_key = self.species_listbox.get(selection[0])
+        self.current_selected_species = species_name_key
+        image_files = self.species_image_map.get(species_name_key, [])
 
-        # 更新滑块的值为当前物种的设置，如果不存在则使用默认值
-        default_conf = self.controller.confidence_settings.get(species_name, 0.25)
-        self.species_conf_var.set(default_conf)
-        self._update_confidence_label(default_conf)  # 更新标签显示
+        photo_count = len(image_files)
+        self.controller.status_bar.status_label.config(text=f"当前物种共有 {photo_count} 张照片")
+
+        # 根据选择的物种（或组合）来决定是否显示置信度滑块
+        if species_name_key == "标记为空":
+            self.species_conf_slider.grid_remove()
+            self.species_conf_label.grid_remove()
+        else:
+            self.species_conf_slider.grid()
+            self.species_conf_label.grid()
+            # 更新滑块的值为当前物种的设置，如果不存在则使用默认值
+            # 注意：对于组合物种，我们暂时使用全局设置
+            default_conf = self.controller.confidence_settings.get(species_name_key, self.controller.confidence_settings.get("global", 0.25))
+            self.species_conf_var.set(default_conf)
+            self._update_confidence_label(default_conf)
 
         for image_file in image_files:
             self.species_photo_listbox.insert(tk.END, image_file)
+
+        # 如果照片列表不为空，则自动选择第一个并触发加载
+        if self.species_photo_listbox.size() > 0:
+            self.species_photo_listbox.selection_set(0)
+            self.species_photo_listbox.event_generate("<<ListboxSelect>>")
 
     def _load_species_buttons(self):
         """从/res/model.json加载物种按钮"""
@@ -1231,13 +1464,29 @@ class PreviewPage(ttk.Frame):
         self._selected_species_button = btn_widget
         self._species_marked = species_name
 
+        # 只要点击了快速标记按钮，就将其标记为错误
+        self._mark_as_error_and_save(file_name)
+
         # 如果数量已经标记，则更新JSON并跳转
         if self._count_marked is not None:
             self._update_json_file(file_name, new_species=self._species_marked, new_count=str(self._count_marked))
-            self._mark_and_move_to_next()
+            self._move_to_next_image()
         else:
-            # 否则，只更新JSON中的物种名称
-            self._update_json_file(file_name, new_species=self._species_marked)
+            # 如果只点击了物种，且原始识别包含多个物种，则将数量设置为总和
+            species_names_original = self.current_species_info.get('物种名称', '').split(',')
+            species_counts_original_str = self.current_species_info.get('物种数量', '').split(',')
+
+            if len(species_names_original) > 1 and species_names_original[0] != '空':
+                try:
+                    species_counts_original = [int(c.strip()) for c in species_counts_original_str]
+                    new_count = sum(species_counts_original)
+                    self._update_json_file(file_name, new_species=self._species_marked, new_count=str(new_count))
+                except (ValueError, IndexError):
+                    # 如果转换失败，则仅更新物种名称
+                    self._update_json_file(file_name, new_species=self._species_marked)
+            else:
+                # 如果原始识别只有一个物种，或为空，则仅更新物种名称 (数量维持原样)
+                self._update_json_file(file_name, new_species=self._species_marked)
 
     def _mark_and_move_to_next(self, is_correct=None, species_name=None, count=None):
         """
@@ -1282,21 +1531,6 @@ class PreviewPage(ttk.Frame):
             self._save_validation_data()
             self._move_to_next_image()
 
-    def _mark_other_species(self):
-        """处理“其他”按钮的逻辑，弹出对话框"""
-        selection = self.species_photo_listbox.curselection()
-        if not selection:
-            return
-
-        file_name = self.species_photo_listbox.get(selection[0])
-
-        dialog = CorrectionDialog(self, title="输入其他物种信息")
-        if dialog.result:
-            species_name, species_count = dialog.result
-            self._update_json_file(file_name, new_species=species_name, new_count=species_count)
-            self.validation_data[file_name] = False  # 明确标记为 False
-            self._mark_and_move_to_next(species_name=None)
-
     def _on_quantity_button_press(self, count, btn_widget):
         """处理数量按钮点击事件，并管理按钮状态"""
         selection = self.species_photo_listbox.curselection()
@@ -1314,7 +1548,7 @@ class PreviewPage(ttk.Frame):
             else:
                 return
 
-                # 取消上一个数量按钮的选中状态
+        # 取消上一个数量按钮的选中状态
         if self._selected_quantity_button and self._selected_quantity_button.winfo_exists():
             self._selected_quantity_button.configure(style="TButton")
 
@@ -1323,67 +1557,563 @@ class PreviewPage(ttk.Frame):
         self._selected_quantity_button = btn_widget
         self._count_marked = final_count
 
+        # 只要点击了数量按钮，就将其标记为错误
+        self._mark_as_error_and_save(file_name)
+
         # 如果物种已经标记，则更新JSON并跳转
         if self._species_marked:
             self._update_json_file(file_name, new_species=self._species_marked, new_count=str(self._count_marked))
-            self._mark_and_move_to_next()
+            self._move_to_next_image()
         else:
             # 否则，只更新JSON中的数量
             self._update_json_file(file_name, new_count=str(final_count))
 
-    def _move_to_next_image(self):
-        """重置状态并跳转到下一张图片"""
-        # 重置状态变量
-        self._species_marked = None
-        self._count_marked = None
-
-        # 重置物种按钮的视觉状态
-        if self._selected_species_button and self._selected_species_button.winfo_exists():
-            self._selected_species_button.configure(style="TButton")
-        self._selected_species_button = None
-
-        # 重置数量按钮的视觉状态
-        if self._selected_quantity_button and self._selected_quantity_button.winfo_exists():
-            self._selected_quantity_button.configure(style="TButton")
-        self._selected_quantity_button = None
-
+    def _mark_other_species(self):
+        """处理“其他”按钮的逻辑，弹出对话框"""
         selection = self.species_photo_listbox.curselection()
         if not selection:
             return
 
-        current_index = selection[0]
-        if current_index < self.species_photo_listbox.size() - 1:
-            next_index = current_index + 1
-            self.species_photo_listbox.selection_clear(0, tk.END)
-            self.species_photo_listbox.selection_set(next_index)
-            self.species_photo_listbox.see(next_index)
-            self.species_photo_listbox.event_generate("<<ListboxSelect>>")
-        else:
-            self.species_image_label.config(image='')
-            if hasattr(self.species_image_label, 'image'):
-                self.species_image_label.image = None
+        file_name = self.species_photo_listbox.get(selection[0])
+
+        dialog = CorrectionDialog(self, title="输入其他物种信息")
+        if dialog.result:
+            species_name, species_count = dialog.result
+            self._update_json_file(file_name, new_species=species_name, new_count=species_count)
+            # 标记为错误并跳转
+            self._mark_as_error_and_save(file_name)
+            self._move_to_next_image()
+
+    def _move_to_next_image(self):
+        """重置状态并智能跳转到当前物种列表中的下一张未校验图片"""
+        # 重置按钮和标记状态
+        self._species_marked = None
+        self._count_marked = None
+
+        if self._selected_species_button and self._selected_species_button.winfo_exists():
+            self._selected_species_button.configure(style="TButton")
+        self._selected_species_button = None
+
+        if self._selected_quantity_button and self._selected_quantity_button.winfo_exists():
+            self._selected_quantity_button.configure(style="TButton")
+        self._selected_quantity_button = None
+
+        # --- 新的智能跳转逻辑 ---
+        selection = self.species_photo_listbox.curselection()
+        current_index = selection[0] if selection else -1
+
+        total_files = self.species_photo_listbox.size()
+        if total_files == 0:
+            return
+
+        all_files_list = list(self.species_photo_listbox.get(0, tk.END))
+
+        # 1. 优先从当前位置向后查找下一个未被校验的项目
+        for i in range(current_index + 1, total_files):
+            if all_files_list[i] not in self.validation_data:
+                self.species_photo_listbox.selection_clear(0, tk.END)
+                self.species_photo_listbox.selection_set(i)
+                self.species_photo_listbox.see(i)
+                self.species_photo_listbox.event_generate("<<ListboxSelect>>")
+                return
+
+        # 2. 如果后面没有，再从头开始查找未被校验的项目
+        for i in range(current_index + 1):
+            if all_files_list[i] not in self.validation_data:
+                self.species_photo_listbox.selection_clear(0, tk.END)
+                self.species_photo_listbox.selection_set(i)
+                self.species_photo_listbox.see(i)
+                self.species_photo_listbox.event_generate("<<ListboxSelect>>")
+                return
+
+        # 3. 如果当前物种所有图片都已校验，则清空预览并提示
+        self.species_image_label.config(image='', text="当前物种所有图片已校验完成")
+        if hasattr(self.species_image_label, 'image'):
+            self.species_image_label.image = None
 
     def _on_confidence_slider_changed(self, value):
         """处理置信度滑块值的变化"""
-        self._update_confidence_label(value)  # 更新标签显示
+        self._update_confidence_label(value)
 
-        # 关键修复：使用实例变量来获取当前物种，而不是依赖列表焦点
-        if not self.current_selected_species:
+        # V V V V V V V V V V V V V V V V V V V V V V V V V V V V
+        # MODIFICATION START
+        # V V V V V V V V V V V V V V V V V V V V V V V V V V V V
+        # 重新计算并更新信息标签
+        self._recalculate_and_update_info_label(
+            self.species_info_label,
+            self.current_species_info,
+            self.species_conf_var.get()
+        )
+        # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
+        # MODIFICATION END
+        # ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^ ^
+
+        self._redraw_boxes_with_new_confidence(value)
+
+        if not self.current_selected_species or self.current_selected_species == "标记为空":
             return
 
         species_name = self.current_selected_species
 
-        # 更新并保存置信度设置
         new_conf = round(float(value), 2)
-        self.species_conf_var.set(new_conf)
         self.controller.confidence_settings[species_name] = new_conf
         self.controller.settings_manager.save_confidence_settings(self.controller.confidence_settings)
-
-        # 如果右侧照片列表有选中项，则重新加载当前图片以应用新的置信度
-        if self.species_photo_listbox.curselection():
-            self._on_species_photo_selected(None)
 
     def _update_confidence_label(self, value):
         """更新置信度滑块旁边的数值标签"""
         if self.species_conf_label:
             self.species_conf_label.config(text=f"{float(value):.2f}")
+
+    def _load_validation_species_buttons(self):
+        """为“检验校验(时间)”页面加载物种按钮"""
+        for widget in self.validation_species_buttons_frame.winfo_children():
+            widget.destroy()
+
+        try:
+            model_json_path = resource_path("res/model.json")
+            if os.path.exists(model_json_path):
+                with open(model_json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    species_list = data.get("species", [])
+                    for species_name in species_list:
+                        def create_command(s, b):
+                            return lambda: self._on_validation_species_button_press(s, b)
+
+                        btn = ttk.Button(self.validation_species_buttons_frame, text=species_name)
+                        btn['command'] = create_command(species_name, btn)
+                        btn.pack(fill="x", pady=2)
+            else:
+                ttk.Label(self.validation_species_buttons_frame, text="未找到model.json").pack()
+        except Exception as e:
+            logger.error(f"加载物种按钮失败: {e}")
+            ttk.Label(self.validation_species_buttons_frame, text="加载物种按钮失败").pack()
+
+    def _on_validation_species_button_press(self, species_name, btn_widget):
+        """处理时间校验页的物种按钮点击事件"""
+        selection = self.validation_listbox.curselection()
+        if not selection: return
+
+        file_name = self.validation_listbox.get(selection[0])
+
+        if self._selected_validation_species_button and self._selected_validation_species_button.winfo_exists():
+            self._selected_validation_species_button.configure(style="TButton")
+
+        btn_widget.configure(style="Selected.TButton")
+        self._selected_validation_species_button = btn_widget
+        self._species_validation_marked = species_name
+
+        # 修复： 只要点击了快速标记按钮，就将其标记为错误
+        self._mark_as_error_and_save(file_name)
+
+        if self._count_validation_marked is not None:
+            self._update_json_file(file_name, new_species=self._species_validation_marked,
+                                   new_count=str(self._count_validation_marked))
+            self._move_to_next_validation_image()
+        else:
+            # 如果只点击了物种，且原始识别包含多个物种，则将数量设置为总和
+            species_names_original = self.current_validation_info.get('物种名称', '').split(',')
+            species_counts_original_str = self.current_validation_info.get('物种数量', '').split(',')
+
+            if len(species_names_original) > 1 and species_names_original[0] != '空':
+                try:
+                    species_counts_original = [int(c.strip()) for c in species_counts_original_str]
+                    new_count = sum(species_counts_original)
+                    self._update_json_file(file_name, new_species=self._species_validation_marked,
+                                           new_count=str(new_count))
+                except (ValueError, IndexError):
+                    # 如果转换失败，则仅更新物种名称
+                    self._update_json_file(file_name, new_species=self._species_validation_marked)
+            else:
+                # 如果原始识别只有一个物种，或为空，则仅更新物种名称 (数量维持原样)
+                self._update_json_file(file_name, new_species=self._species_validation_marked)
+
+    def _on_validation_quantity_button_press(self, count, btn_widget):
+        """处理时间校验页的数量按钮点击事件"""
+        selection = self.validation_listbox.curselection()
+        if not selection: return
+
+        file_name = self.validation_listbox.get(selection[0])
+
+        final_count = count
+        if count == "更多":
+            from tkinter import simpledialog
+            result = simpledialog.askinteger("输入数量", "请输入物种的数量:", parent=self)
+            if result is not None:
+                final_count = result
+            else:
+                return
+
+        if self._selected_validation_quantity_button and self._selected_validation_quantity_button.winfo_exists():
+            self._selected_validation_quantity_button.configure(style="TButton")
+
+        btn_widget.configure(style="Selected.TButton")
+        self._selected_validation_quantity_button = btn_widget
+        self._count_validation_marked = final_count
+
+        # 修复： 只要点击了数量按钮，就将其标记为错误
+        self._mark_as_error_and_save(file_name)
+
+        if self._species_validation_marked:
+            self._update_json_file(file_name, new_species=self._species_validation_marked,
+                                   new_count=str(self._count_validation_marked))
+            self._move_to_next_validation_image()
+        else:
+            self._update_json_file(file_name, new_count=str(final_count))
+
+    def _mark_validation_other_species(self):
+        selection = self.validation_listbox.curselection()
+        if not selection: return
+
+        file_name = self.validation_listbox.get(selection[0])
+        dialog = CorrectionDialog(self, title="输入其他物种信息")
+        if dialog.result:
+            species_name, species_count = dialog.result
+            self._mark_validation_and_move_to_next(species_name=species_name, count=species_count)
+
+    def _mark_validation_and_move_to_next(self, is_correct=None, species_name=None, count=None):
+        selection = self.validation_listbox.curselection()
+        if not selection: return
+
+        file_name = self.validation_listbox.get(selection[0])
+
+        if is_correct is True:
+            self.validation_data[file_name] = True
+        else:
+            self.validation_data[file_name] = False
+            if species_name or count:
+                self._update_json_file(file_name, new_species=species_name, new_count=count)
+
+        self._save_validation_data()
+        self._move_to_next_validation_image()
+
+    def _move_to_next_validation_image(self):
+        self._species_validation_marked = None
+        self._count_validation_marked = None
+
+        if self._selected_validation_species_button and self._selected_validation_species_button.winfo_exists():
+            self._selected_validation_species_button.configure(style="TButton")
+        self._selected_validation_species_button = None
+
+        if self._selected_validation_quantity_button and self._selected_validation_quantity_button.winfo_exists():
+            self._selected_validation_quantity_button.configure(style="TButton")
+        self._selected_validation_quantity_button = None
+
+        self._select_next_image()
+
+    def _on_validation_confidence_slider_changed(self, value):
+        """处理时间校验页置信度滑块值的变化"""
+        if self.validation_conf_label:
+            self.validation_conf_label.config(text=f"{float(value):.2f}")
+
+        # 重新计算并更新信息标签
+        self._recalculate_and_update_info_label(
+            self.validation_status_label,
+            self.current_validation_info,
+            self.validation_conf_var.get()
+        )
+
+        self._redraw_validation_boxes_with_new_confidence(value)
+
+        new_conf = round(float(value), 2)
+        self.controller.confidence_settings["global"] = new_conf
+        self.controller.settings_manager.save_confidence_settings(self.controller.confidence_settings)
+
+    def _on_preview_confidence_slider_changed(self, value):
+        """处理预览页置信度滑块值的变化"""
+        if self.preview_conf_label:
+            self.preview_conf_label.config(text=f"{float(value):.2f}")
+        if self.show_detection_var.get():
+            self._redraw_preview_boxes_with_new_confidence(value)
+
+    def _dispatch_export(self):
+        """根据下拉框的选择来分派导出任务"""
+        export_type = self.export_format_var.get()
+        if export_type == "错误照片":
+            self._export_error_images()
+        elif export_type in ["Excel", "CSV"]:
+            self._export_validation_data()
+        else:
+            messagebox.showwarning("提示", "未知的导出类型。", parent=self)
+
+        self.validation_image_label.focus_set()
+
+    def _draw_detection_boxes(self, image_label, original_image, detection_info, conf_threshold_str):
+        """
+        根据给定的置信度阈值，在指定的原始图像上绘制检测框，并更新对应的UI标签。
+
+        Args:
+            image_label (ttk.Label): 要更新图像的UI组件。
+            original_image (PIL.Image): 用于绘制的原始PIL图像。
+            detection_info (dict): 包含检测框信息的字典。
+            conf_threshold_str (str): 置信度阈值的字符串表示。
+        """
+        # 1. 检查是否有原始图像
+        if not original_image:
+            placeholder_text = "请从左侧列表选择图像"
+            if image_label == self.validation_image_label:
+                placeholder_text = "请从左侧列表选择处理后的图像"
+            image_label.config(image='', text=placeholder_text)
+            if hasattr(image_label, 'image'):
+                image_label.image = None
+            return
+
+        # 如果有图像但没有检测信息，则只显示原始图片
+        if not detection_info or not detection_info.get("检测框"):
+            resized_img = self._resize_image_to_fit(original_image, image_label.winfo_width(),
+                                                    image_label.winfo_height())
+            photo = ImageTk.PhotoImage(resized_img)
+            image_label.config(image=photo)
+            image_label.image = photo
+            return
+
+        try:
+            conf_threshold = float(conf_threshold_str)
+        except (ValueError, TypeError):
+            return
+
+        # --- 字体加载 ---
+        try:
+            font_path = resource_path("res/AlibabaPuHuiTi-3-65-Medium.ttf")
+            font_size = int(0.03 * original_image.height)
+            font = ImageFont.truetype(font_path, font_size)
+        except IOError:
+            logger.warning("中文字体文件 res/AlibabaPuHuiTi-3-65-Medium.ttf 未找到。")
+            font = ImageFont.load_default()
+
+        # --- 绘制逻辑 ---
+        img_to_draw = original_image.copy()
+        draw = ImageDraw.Draw(img_to_draw)
+        boxes_info = detection_info.get("检测框", [])
+
+        for box in boxes_info:
+            confidence = box.get("置信度", 0)
+            if confidence >= conf_threshold:
+                bbox = box.get("边界框")
+                species_name = box.get("物种")
+                label = f"{species_name} {confidence:.2f}"
+                color = self._get_color_for_species(species_name)
+
+                # 转换十六进制颜色为RGB元组
+                hex_color = color.lstrip('#')
+                r, g, b = tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
+                # 计算亮度 (YIQ a formula)
+                brightness = ((r * 299) + (g * 587) + (b * 114)) / 1000
+
+                # 根据亮度选择字体颜色
+                text_color = "#FFFFFF" if brightness < 128 else "#000000"
+
+                p1, p2 = (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3]))
+                draw.rectangle([p1, p2], outline=color, width=7)
+
+                try:
+                    text_bbox = draw.textbbox((p1[0], p1[1] - font_size - 3), label, font=font)
+                    draw.rectangle(text_bbox, fill=color)
+                    draw.text((p1[0], p1[1] - font_size - 3), label, fill=text_color, font=font)
+                except AttributeError:
+                    draw.text((p1[0], p1[1] - 15), label, fill=color, font=font)
+
+        # --- 更新UI ---
+        resized_img = self._resize_image_to_fit(img_to_draw, image_label.winfo_width(), image_label.winfo_height())
+        photo = ImageTk.PhotoImage(resized_img)
+        image_label.config(image=photo)
+        image_label.image = photo
+
+    def _redraw_preview_boxes_with_new_confidence(self, conf_threshold_str):
+        """根据新的置信度阈值，在预览图像上重新绘制检测框"""
+        self._draw_detection_boxes(
+            image_label=self.image_label,
+            original_image=self.original_image,
+            detection_info=self.current_preview_info,
+            conf_threshold_str=conf_threshold_str
+        )
+
+    def _redraw_validation_boxes_with_new_confidence(self, conf_threshold_str):
+        """根据新的置信度阈值，在时间校验图像上重新绘制检测框"""
+        self._draw_detection_boxes(
+            image_label=self.validation_image_label,
+            original_image=self.validation_original_image,
+            detection_info=self.current_validation_info,
+            conf_threshold_str=conf_threshold_str
+        )
+
+    def _redraw_boxes_with_new_confidence(self, conf_threshold_str):
+        """根据新的置信度阈值，在物种校验图像上重新绘制检测框"""
+        self._draw_detection_boxes(
+            image_label=self.species_image_label,
+            original_image=self.species_validation_original_image,
+            detection_info=self.current_species_info,
+            conf_threshold_str=conf_threshold_str
+        )
+
+    def _get_color_for_species(self, species_name):
+        """为物种分配一个固定的颜色"""
+        if species_name not in self.species_color_map:
+            # 使用hash确保同一物种总能得到相同的颜色索引
+            color_index = hash(species_name) % len(self.color_palette)
+            self.species_color_map[species_name] = self.color_palette[color_index]
+        return self.species_color_map[species_name]
+
+    def on_image_double_click(self, event):
+        pass
+
+    def _select_next_image(self):
+        """在“检验校验(时间)”列表中智能选择下一张图片进行校验。"""
+        selection = self.validation_listbox.curselection()
+        current_index = selection[0] if selection else -1
+
+        total_files = self.validation_listbox.size()
+        if total_files == 0:
+            return
+
+        # 1. 优先从当前位置向后查找下一个未被校验的项目
+        all_files_list = list(self.validation_listbox.get(0, tk.END))
+        for i in range(current_index + 1, total_files):
+            if all_files_list[i] not in self.validation_data:
+                self.validation_listbox.selection_clear(0, tk.END)
+                self.validation_listbox.selection_set(i)
+                self.validation_listbox.see(i)
+                self.validation_listbox.event_generate("<<ListboxSelect>>")
+                return
+
+        # 2. 如果后面没有，再从头开始查找未被校验的项目
+        for i in range(current_index + 1):
+            if all_files_list[i] not in self.validation_data:
+                self.validation_listbox.selection_clear(0, tk.END)
+                self.validation_listbox.selection_set(i)
+                self.validation_listbox.see(i)
+                self.validation_listbox.event_generate("<<ListboxSelect>>")
+                return
+
+        # 3. 如果所有图片都已校验，则按顺序选择下一张图片
+        if current_index < total_files - 1:
+            next_index = current_index + 1
+            self.validation_listbox.selection_clear(0, tk.END)
+            self.validation_listbox.selection_set(next_index)
+            self.validation_listbox.see(next_index)
+            self.validation_listbox.event_generate("<<ListboxSelect>>")
+        else:
+            # 如果已经是最后一张，可以给出提示或清空预览
+            self.validation_image_label.config(image='', text="所有图片已校验完成")
+            if hasattr(self.validation_image_label, 'image'):
+                self.validation_image_label.image = None
+
+    def _update_validation_progress(self):
+        total = self.validation_listbox.size()
+        validated = len(self.validation_data)
+        self.validation_progress_var.set(f"{validated}/{total}")
+
+    def _mark_as_error_and_save(self, file_name):
+        """将当前文件标记为不正确并保存验证数据。"""
+        if file_name:
+            self.validation_data[file_name] = False
+            self._save_validation_data()
+            self._update_validation_progress()
+
+    def navigate_listbox(self, direction: str):
+        """
+        根据方向键（'up'或'down'）在当前激活的列表框中导航。
+        """
+        if self._is_navigating:
+            return  # 如果正在导航，则忽略新的请求
+
+        self._is_navigating = True
+
+        notebook = self.preview_notebook
+        current_tab_index = notebook.index(notebook.select())
+
+        listbox_to_navigate = None
+        if current_tab_index == 0:  # 图像预览
+            listbox_to_navigate = self.file_listbox
+        elif current_tab_index == 1:  # 检验校验(时间)
+            listbox_to_navigate = self.validation_listbox
+        elif current_tab_index == 2:  # 检验校验(物种)
+            listbox_to_navigate = self.species_photo_listbox
+
+        if not listbox_to_navigate or listbox_to_navigate.size() == 0:
+            return
+
+        current_selection = listbox_to_navigate.curselection()
+        current_index = current_selection[0] if current_selection else -1
+
+        if direction == 'down':
+            next_index = 0 if current_index == -1 else (current_index + 1) % listbox_to_navigate.size()
+        elif direction == 'up':
+            next_index = 0 if current_index == -1 else (
+                                                                   current_index - 1 + listbox_to_navigate.size()) % listbox_to_navigate.size()
+        else:
+            return
+
+        # 只有在索引实际改变时才触发事件，避免不必要的重载
+        if next_index != current_index:
+            listbox_to_navigate.selection_clear(0, tk.END)
+            listbox_to_navigate.selection_set(next_index)
+            listbox_to_navigate.see(next_index)
+            listbox_to_navigate.event_generate("<<ListboxSelect>>")
+
+        self.master.after(50, lambda: setattr(self, '_is_navigating', False))
+
+    def _recalculate_and_update_info_label(self, label_widget, detection_info, conf_threshold):
+        """
+        根据置信度阈值重新计算物种数量和最低置信度，并更新指定的标签。
+        """
+        if not detection_info or '检测框' not in detection_info:
+            info_text = (f"物种: {detection_info.get('物种名称', 'N/A')} | "
+                         f"数量: {detection_info.get('物种数量', 'N/A')} | "
+                         f"置信度: {detection_info.get('最低置信度', 'N/A')}")
+            label_widget.config(text=info_text)
+            return
+
+        if detection_info.get('最低置信度') == '人工校验':
+            info_text = (f"物种: {detection_info.get('物种名称', 'N/A')} | "
+                         f"数量: {detection_info.get('物种数量', 'N/A')} | "
+                         f"置信度: 人工校验")
+            label_widget.config(text=info_text)
+            return
+
+        boxes_info = detection_info.get("检测框", [])
+        filtered_species_counts = Counter()
+        valid_confidences = []
+
+        for box in boxes_info:
+            confidence = box.get("置信度", 0)
+            if confidence >= conf_threshold:
+                species_name = box.get("物种")
+                if species_name:
+                    filtered_species_counts[species_name] += 1
+                    valid_confidences.append(confidence)
+
+        min_conf_text = ''
+        if not filtered_species_counts:
+            species_text = "空"
+            count_text = "空"
+        else:
+            species_text = ",".join(filtered_species_counts.keys())
+            count_text = ",".join(map(str, filtered_species_counts.values()))
+            if valid_confidences:
+                min_conf_text = f"{min(valid_confidences):.3f}"
+
+        info_text = (f"物种: {species_text} | "
+                     f"数量: {count_text} | "
+                     f"置信度: {min_conf_text}")
+
+        if label_widget == self.validation_status_label:
+            selection = self.validation_listbox.curselection()
+            if selection:
+                file_name = self.validation_listbox.get(selection[0])
+                status = self.validation_data.get(file_name)
+                status_text = f"  已标记: {'正确 ✅' if status is True else '错误 ❌' if status is False else '未校验'}"
+                info_text += status_text
+
+        label_widget.config(text=info_text)
+
+    def _navigate_listbox_up(self, event=None):
+        """处理向上箭头键事件，用于在当前激活的列表框中向上导航。"""
+        self.navigate_listbox('up')
+        return "break"  # 阻止事件传播
+
+    def _navigate_listbox_down(self, event=None):
+        """处理向下箭头键事件，用于在当前激活的列表框中向下导航。"""
+        self.navigate_listbox('down')
+        return "break"  # 阻止事件传播
+

@@ -29,12 +29,6 @@ class AdvancedPage(ttk.Frame):
         self.controller.use_augment_var = tk.BooleanVar(value=True)
         self.controller.use_agnostic_nms_var = tk.BooleanVar(value=True)
 
-        # Keybinding variables
-        self.key_up_var = tk.StringVar(value='<Up>')
-        self.key_down_var = tk.StringVar(value='<Down>')
-        self.key_correct_var = tk.StringVar(value='<Key-1>')
-        self.key_incorrect_var = tk.StringVar(value='<Key-2>')
-
         # Theme variable
         self.theme_var = tk.StringVar(value="自动")
 
@@ -49,7 +43,7 @@ class AdvancedPage(ttk.Frame):
         panels = [
             self.threshold_panel, self.accel_panel, self.advanced_detect_panel,
             self.pytorch_panel, self.model_panel, self.python_panel,
-            self.keybinding_panel, self.theme_panel, self.cache_panel, self.update_panel
+            self.theme_panel, self.cache_panel, self.update_panel
         ]
         for panel in panels:
             if hasattr(panel, 'update_theme'):
@@ -101,57 +95,6 @@ class AdvancedPage(ttk.Frame):
             (0, 0), window=self.software_content_frame, anchor="nw"
         )
 
-        # --- Keybinding Panel ---
-        self.keybinding_panel = CollapsiblePanel(
-            self.software_content_frame,
-            "按键绑定",
-            subtitle="自定义“检查校验”中的快捷键",
-            icon="⌨️"
-        )
-        self.keybinding_panel.pack(fill="x", expand=False, pady=(0, 1))
-        keybinding_grid = ttk.Frame(self.keybinding_panel.content_padding)
-        keybinding_grid.pack(fill='x', pady=5)
-        keybinding_grid.columnconfigure(1, weight=1)
-
-        key_map = {
-            "上一张图片:": self.key_up_var,
-            "下一张图片:": self.key_down_var,
-            "标记为“正确”:": self.key_correct_var,
-            "标记为“错误”:": self.key_incorrect_var,
-        }
-
-        i = 0
-        for i, (text, var) in enumerate(key_map.items()):
-            ttk.Label(keybinding_grid, text=text).grid(row=i, column=0, sticky='w', padx=5, pady=5)
-            entry = ttk.Entry(keybinding_grid, textvariable=var, width=20)
-            entry.grid(row=i, column=1, sticky='we', padx=5, pady=5)
-
-        ttk.Label(keybinding_grid, text="提示: 单个字母的快捷键不区分大小写。", font=("Segoe UI", 8)).grid(row=i + 1,
-                                                                                                          columnspan=2,
-                                                                                                          sticky='w',
-                                                                                                          padx=5,
-                                                                                                          pady=5)
-
-        keybinding_buttons_frame = ttk.Frame(self.keybinding_panel.content_padding)
-        keybinding_buttons_frame.pack(fill='x', pady=10)
-        keybinding_buttons_frame.columnconfigure(0, weight=1)
-
-        help_button = ttk.Button(
-            keybinding_buttons_frame,
-            text="查看示例",
-            command=self._show_keybinding_help,
-            style="Secondary.TButton"
-        )
-        help_button.grid(row=0, column=0, sticky='w')
-
-        save_button = ttk.Button(
-            keybinding_buttons_frame,
-            text="保存快捷键",
-            command=self._save_keybindings,
-            style="Action.TButton"
-        )
-        save_button.grid(row=0, column=1, sticky='e')
-
         # --- Theme Panel ---
         self.theme_panel = CollapsiblePanel(
             self.software_content_frame,
@@ -201,7 +144,7 @@ class AdvancedPage(ttk.Frame):
 
         clear_cache_button = ttk.Button(
             buttons_container,
-            text="清除图片缓存",
+            text="清除缓存",
             command=self._clear_image_cache_with_refresh,
             style="Action.TButton"
         )
@@ -246,42 +189,6 @@ class AdvancedPage(ttk.Frame):
 
         self._configure_software_scrolling()
         self.master.after(100, lambda: self.software_canvas.yview_moveto(0.0))
-
-    def _show_keybinding_help(self):
-        help_text = """
-快捷键格式示例
-
-您可以使用以下格式来定义快捷键。
-
-- **普通按键:** - 字母: a, b, c (大小写均可)
-  - 数字: 1, 2, 3
-
-- **特殊按键 (需用尖括号):**
-  - 功能键: <F1>, <F2>, ... <F12>
-  - 方向键: <Up>, <Down>, <Left>, <Right>
-  - 其他: <Space>, <Return> (回车), <Escape>, <Tab>
-  - 数字键盘: <KP_0>, <KP_1>, ... <KP_Add>, <KP_Enter>
-
-- **修饰键组合 (用连字符连接):**
-  - Ctrl: <Control-a>, <Control-Up>
-  - Alt: <Alt-a>, <Alt-Left>
-  - Shift: <Shift-a> (或直接用大写 A)
-
-- **鼠标按键:**
-  - 左键: <Button-1> 或 <1>
-  - 中键: <Button-2> 或 <2>
-  - 右键: <Button-3> 或 <3>
-  - 滚轮: <MouseWheel>
-
-**注意:** 单个字母的快捷键会自动识别大小写。
-"""
-        messagebox.showinfo("快捷键设置示例", help_text, parent=self.master)
-
-    def _save_keybindings(self):
-        """Saves the keybinding settings and re-binds them in the preview page."""
-        self.controller._save_current_settings()
-        self.controller.preview_page.rebind_keys()
-        messagebox.showinfo("成功", "快捷键设置已保存并生效。", parent=self.master)
 
     def update_cache_size(self):
         """Calculates and updates the cache size display in a separate thread."""
