@@ -16,7 +16,7 @@ from system.config import APP_VERSION
 
 # GitHub仓库信息
 GITHUB_USER = "wakin721"
-GITHUB_REPO = "animal_detect"
+GITHUB_REPO = "Neri"
 
 
 def get_icon_path():
@@ -249,11 +249,17 @@ def perform_download(parent_window, download_url):
                     args = [sys.executable]
                 else:
                     app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                    main_script_path = os.path.join(app_root, 'main.py')
+                    python_exe_path = os.path.join(app_root, "toolkit", "python.exe")
+                    main_script_path = os.path.join(app_root, 'gui.py')
+
+                    if not os.path.exists(python_exe_path):
+                        # 如果 toolkit/python.exe 不存在，则回退到 sys.executable
+                        python_exe_path = sys.executable
+
                     if not os.path.exists(main_script_path):
                         _show_messagebox(parent_window, "重启错误", f"找不到主脚本: {main_script_path}", "error")
                         return
-                    args = [sys.executable, main_script_path]
+                    args = [python_exe_path, main_script_path]
 
                 try:
                     # 在新的控制台中重新启动应用程序

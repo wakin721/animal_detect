@@ -46,7 +46,7 @@ class ObjectDetectionGUI:
         self.cache_data = cache_data
         self.current_temp_photo_dir = None
         self.is_dark_mode = False
-        self.accent_color = "#0078d7"
+        self.accent_color = "#dbbcc2"  # 默认使用浅色模式的颜色
         import torch
         self.cuda_available = torch.cuda.is_available()
         self.is_processing = False
@@ -192,9 +192,11 @@ class ObjectDetectionGUI:
         elif selected_theme == "深色":
             sv_ttk.set_theme("dark")
             self.is_dark_mode = True
+            self.accent_color = "#5d3a4f"
         else:  # "浅色"
             sv_ttk.set_theme("light")
             self.is_dark_mode = False
+            self.accent_color = "#dbbcc2"
 
         # 使用 "after" 来延迟UI更新，确保sv_ttk有时间应用主题
         self.master.after(50, self._finalize_theme_change)
@@ -212,26 +214,19 @@ class ObjectDetectionGUI:
             if system_theme == 'dark':
                 sv_ttk.set_theme("dark")
                 self.is_dark_mode = True
+                self.accent_color = "#5d3a4f"
             else:
                 sv_ttk.set_theme("light")
                 self.is_dark_mode = False
-            self._detect_system_accent_color()
+                self.accent_color = "#dbbcc2"
         except Exception as e:
             sv_ttk.set_theme("light")
             self.is_dark_mode = False
+            self.accent_color = "#dbbcc2"
             logger.warning(f"无法检测系统主题: {e}")
 
     def _detect_system_accent_color(self):
-        try:
-            if platform.system() == "Windows":
-                import winreg
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\DWM")
-                color_dword = winreg.QueryValueEx(key, "AccentColor")[0]
-                self.accent_color = f"#{color_dword & 0xFF:02x}{(color_dword >> 8) & 0xFF:02x}{(color_dword >> 16) & 0xFF:02x}"
-            else:
-                self.accent_color = "#0078d7"
-        except Exception:
-            self.accent_color = "#0078d7"
+        pass
 
     def setup_theme_monitoring(self):
         if platform.system() in ["Windows", "Darwin"]:

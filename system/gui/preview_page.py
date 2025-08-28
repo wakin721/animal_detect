@@ -26,16 +26,18 @@ logger = logging.getLogger(__name__)
 class CorrectionDialog(tk.Toplevel):
     """用于修正物种信息的弹窗"""
 
-    def __init__(self, parent, title="修正信息"):
+    def __init__(self, parent, title="修正信息", original_info=None):
         super().__init__(parent)
         self.transient(parent)
         self.title(title)
         self.parent = parent
         self.result = None
+        self.original_info = original_info
 
         # 初始化输入框变量
         self.species_name_var = tk.StringVar()
         self.species_count_var = tk.StringVar()
+        self.remark_var = tk.StringVar()
 
         # 创建窗口内容
         body = ttk.Frame(self)
@@ -66,6 +68,10 @@ class CorrectionDialog(tk.Toplevel):
         species_count_entry = ttk.Entry(master, textvariable=self.species_count_var, width=25)
         species_count_entry.grid(row=1, column=1, padx=5, pady=5)
 
+        ttk.Label(master, text="备注:").grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        remark_entry = ttk.Entry(master, textvariable=self.remark_var, width=25)
+        remark_entry.grid(row=2, column=1, padx=5, pady=5)
+
         return species_name_entry
 
     def create_buttons(self):
@@ -86,6 +92,7 @@ class CorrectionDialog(tk.Toplevel):
         """“确定”按钮的回调函数"""
         species_name = self.species_name_var.get().strip()
         species_count_str = self.species_count_var.get().strip()
+        remark = self.remark_var.get().strip()
 
         # 校验物种名称
         if not species_name:
@@ -93,10 +100,14 @@ class CorrectionDialog(tk.Toplevel):
             return
 
         if not species_count_str:
-            species_count_str = '空'
-            self.result = (species_name, species_count_str)
-            self.destroy()
-            return
+            if self.original_info and self.original_info.get('物种数量'):
+                try:
+                    original_counts = [int(c.strip()) for c in self.original_info['物种数量'].split(',')]
+                    species_count_str = str(sum(original_counts))
+                except (ValueError, TypeError):
+                    species_count_str = '1'
+            else:
+                species_count_str = '1'
 
 
         # 检查物种数量格式
@@ -118,7 +129,7 @@ class CorrectionDialog(tk.Toplevel):
                 )
                 return
 
-        self.result = (species_name, species_count_str)
+        self.result = (species_name, species_count_str, remark)
         self.destroy()
 
     def cancel(self, event=None):
@@ -866,7 +877,7 @@ class PreviewPage(ttk.Frame):
         else:
             self.validation_data = {}
 
-    def _update_json_file(self, file_name: str, new_species: str = None, new_count: str = None):
+    def _update_json_file(self, file_name: str, new_species: str = None, new_count: str = None, new_remark: str = None):
         """根据弹窗输入更新JSON文件"""
         photo_dir = self.controller.get_temp_photo_dir()
         if not photo_dir: return
@@ -883,6 +894,9 @@ class PreviewPage(ttk.Frame):
                         data['物种名称'] = new_species
                     if new_count is not None:
                         data['物种数量'] = str(new_count)
+                    if new_remark is not None:
+                        data['备注'] = new_remark
+
 
                     # 只要有手动修改，就更新置信度和时间
                     data['最低置信度'] = '人工校验'
@@ -1576,10 +1590,10 @@ class PreviewPage(ttk.Frame):
 
         file_name = self.species_photo_listbox.get(selection[0])
 
-        dialog = CorrectionDialog(self, title="输入其他物种信息")
+        dialog = CorrectionDialog(self, title="输入其他物种信息", original_info=self.current_species_info)
         if dialog.result:
-            species_name, species_count = dialog.result
-            self._update_json_file(file_name, new_species=species_name, new_count=species_count)
+            species_name, species_count, remark = dialog.result
+            self._update_json_file(file_name, new_species=species_name, new_count=species_count, new_remark=remark)
             # 标记为错误并跳转
             self._mark_as_error_and_save(file_name)
             self._move_to_next_image()
@@ -1765,12 +1779,12 @@ class PreviewPage(ttk.Frame):
         if not selection: return
 
         file_name = self.validation_listbox.get(selection[0])
-        dialog = CorrectionDialog(self, title="输入其他物种信息")
+        dialog = CorrectionDialog(self, title="输入其他物种信息", original_info=self.current_validation_info)
         if dialog.result:
-            species_name, species_count = dialog.result
-            self._mark_validation_and_move_to_next(species_name=species_name, count=species_count)
+            species_name, species_count, remark = dialog.result
+            self._mark_validation_and_move_to_next(species_name=species_name, count=species_count, remark=remark)
 
-    def _mark_validation_and_move_to_next(self, is_correct=None, species_name=None, count=None):
+    def _mark_validation_and_move_to_next(self, is_correct=None, species_name=None, count=None, remark=None):
         selection = self.validation_listbox.curselection()
         if not selection: return
 
@@ -1780,8 +1794,8 @@ class PreviewPage(ttk.Frame):
             self.validation_data[file_name] = True
         else:
             self.validation_data[file_name] = False
-            if species_name or count:
-                self._update_json_file(file_name, new_species=species_name, new_count=count)
+            if species_name or count or remark:
+                self._update_json_file(file_name, new_species=species_name, new_count=count, new_remark=remark)
 
         self._save_validation_data()
         self._move_to_next_validation_image()

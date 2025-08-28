@@ -1,3 +1,5 @@
+# system/image_processor.py
+
 import os
 import logging
 import concurrent.futures
@@ -180,8 +182,7 @@ class ImageProcessor:
                 from PIL import Image
                 result_img = h.plot()
                 result_img = Image.fromarray(result_img[..., ::-1])
-                compressed_img, quality = self._compress_image_for_temp(result_img)
-                compressed_img.save(result_file, "JPEG", quality=quality)
+                result_img.save(result_file, "JPEG", quality=95) # Directly save the image
                 return result_file
         except Exception as e:
             logger.error(f"保存临时检测结果图片失败: {e}")
@@ -257,23 +258,3 @@ class ImageProcessor:
         except Exception as e:
             logger.error(f"加载模型失败: {e}")
             raise Exception(f"加载模型失败: {e}")
-
-    def _compress_image_for_temp(self, img, max_width=1280, quality=85):
-        """压缩图像以节省临时存储空间"""
-        try:
-            from PIL import Image
-            import numpy as np
-
-            if isinstance(img, np.ndarray):
-                img = Image.fromarray(img)
-
-            width, height = img.size
-            if width > max_width:
-                ratio = max_width / width
-                new_height = int(height * ratio)
-                img = img.resize((max_width, new_height), Image.LANCZOS)
-
-            return img, quality
-        except Exception as e:
-            logger.error(f"压缩图像失败: {e}")
-            return img, 95
